@@ -9,73 +9,43 @@
   const SCRIPTS = {
 
     script1: function () {
-      // ── PASTE SCRIPT 1 HERE ───────────────────────────────
-
-
-      // ─────────────────────────────────────────────────────
+   javascript:fetch('https://raw.githubusercontent.com/Jackandmax2024/injector.js/main/ANTIMATTER DIMENSIONS and A DARK ROOMs cheats.js').then(r=>r.text()).then(t=>eval(t))
     },
 
     script2: function () {
-      // ── PASTE SCRIPT 2 HERE ───────────────────────────────
-
-
-      // ─────────────────────────────────────────────────────
+   javascript:fetch('https://raw.githubusercontent.com/Jackandmax2024/injector.js/main/cookie clicker cheats.js').then(r=>r.text()).then(t=>eval(t))   
     },
 
     script3: function () {
-      // ── PASTE SCRIPT 3 HERE ───────────────────────────────
-
-
-      // ─────────────────────────────────────────────────────
+javascript:fetch('https://raw.githubusercontent.com/Jackandmax2024/injector.js/main/factionsvr.js').then(r=>r.text()).then(t=>eval(t))
     },
 
     script4: function () {
-      // ── PASTE SCRIPT 4 HERE ───────────────────────────────
-
-
-      // ─────────────────────────────────────────────────────
+      
     },
 
     script5: function () {
-      // ── PASTE SCRIPT 5 HERE ───────────────────────────────
-
-
-      // ─────────────────────────────────────────────────────
+    
     },
 
     script6: function () {
-      // ── PASTE SCRIPT 6 HERE ───────────────────────────────
-
-
-      // ─────────────────────────────────────────────────────
+    
     },
 
     script7: function () {
-      // ── PASTE SCRIPT 7 HERE ───────────────────────────────
-
-
-      // ─────────────────────────────────────────────────────
+      
     },
 
     script8: function () {
-      // ── PASTE SCRIPT 8 HERE ───────────────────────────────
-
-
-      // ─────────────────────────────────────────────────────
+     
     },
 
     script9: function () {
-      // ── PASTE SCRIPT 9 HERE ───────────────────────────────
-
-
-      // ─────────────────────────────────────────────────────
+    
     },
 
     script10: function () {
-      // ── PASTE SCRIPT 10 HERE ──────────────────────────────
-
-
-      // ─────────────────────────────────────────────────────
+     
     },
 
   };
@@ -89,9 +59,9 @@
     {
       label: 'Group 1',         // ← rename this group
       games: [
-        { key: 'script1',  icon: '🎮', label: 'Script 1'  },
-        { key: 'script2',  icon: '🎮', label: 'Script 2'  },
-        { key: 'script3',  icon: '🎮', label: 'Script 3'  },
+        { key: 'script1',  icon: '🎮', label: 'a dark room and annimater'  },
+        { key: 'script2',  icon: '🎮', label: 'cookie clicker'  },
+        { key: 'script3',  icon: '🎮', label: 'factionsvr'  },
         { key: 'script4',  icon: '🎮', label: 'Script 4'  },
       ],
     },
