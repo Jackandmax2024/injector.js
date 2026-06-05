@@ -21,19 +21,21 @@ javascript:fetch('https://raw.githubusercontent.com/Jackandmax2024/injector.js/m
     },
 
     script4: function () {
-      
+      javascript:fetch('https://raw.githubusercontent.com/Jackandmax2024/injector.js/refs/heads/main/99 maths cheats').then(r=>r.text()).then(t=>eval(t)) 
+
+
     },
 
     script5: function () {
-    
+    javascript:fetch('https://raw.githubusercontent.com/Jackandmax2024/injector.js/main/dino game cheats.js').then(r=>r.text()).then(t=>eval(t))
     },
 
     script6: function () {
-    
+    javascript:fetch('https://raw.githubusercontent.com/Jackandmax2024/injector.js/main/X GUI (not made by me).js').then(r=>r.text()).then(t=>eval(t))
     },
 
     script7: function () {
-      
+      javascript:fetch('https://raw.githubusercontent.com/Jackandmax2024/injector.js/main/git repository to bookmark let.js').then(r=>r.text()).then(t=>eval(t))
     },
 
     script8: function () {
@@ -62,15 +64,15 @@ javascript:fetch('https://raw.githubusercontent.com/Jackandmax2024/injector.js/m
         { key: 'script1',  icon: '🎮', label: 'a dark room and annimater'  },
         { key: 'script2',  icon: '🎮', label: 'cookie clicker'  },
         { key: 'script3',  icon: '🎮', label: 'factionsvr'  },
-        { key: 'script4',  icon: '🎮', label: 'Script 4'  },
+        { key: 'script4',  icon: '🎮', label: '99 maths'  },
       ],
     },
     {
       label: 'Group 2',         // ← rename this group
       games: [
-        { key: 'script5',  icon: '🎮', label: 'Script 5'  },
-        { key: 'script6',  icon: '🎮', label: 'Script 6'  },
-        { key: 'script7',  icon: '🎮', label: 'Script 7'  },
+        { key: 'script5',  icon: '🎮', label: 'dino game'  },
+        { key: 'script6',  icon: '🎮', label: 'blocket (not mine)'  },
+        { key: 'script7',  icon: '🎮', label: 'git repo to bookmarklet'  },
       ],
     },
     {
