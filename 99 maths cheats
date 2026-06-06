@@ -1,4 +1,5 @@
 /*
+	Console-ready cheats UI for 99maths.
 	Ctrl+Q to toggle overlay.
 */
 
@@ -21,17 +22,15 @@
 	}
 
 	function findBestField(){
-		// ── FIX: ignore activeElement if it's a button/our own UI ──
 		const focused = document.activeElement;
 		const isRealInput = focused &&
-			focused.tagName === 'INPUT' &&
-			focused.type !== 'button' &&
-			focused.type !== 'submit' &&
+			focused.tagName==='INPUT' &&
+			focused.type!=='button' &&
+			focused.type!=='submit' &&
 			!focused.closest('#'+OVERLAY_ID);
 		if (isRealInput) return focused;
-
 		const inputs = Array.from(document.querySelectorAll('input[type=text], input:not([type]), textarea'))
-			.filter(i => !i.closest('#'+OVERLAY_ID));
+			.filter(i=>!i.closest('#'+OVERLAY_ID));
 		for (const i of inputs){
 			const rect = i.getBoundingClientRect();
 			if (rect.width>20 && rect.height>10 && isVisible(i)) return i;
@@ -43,25 +42,20 @@
 
 	function doAutofill(answer){
 		const target = findBestField();
-		if (!target){
-			console.warn('[cheats] No input found.');
-			return;
-		}
+		if (!target){ console.warn('[cheats] No input found.'); return; }
 		try{ target.focus(); }catch(e){}
+		const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
 		if (target.isContentEditable){
-			try{ target.innerText = ''; dispatchEvents(target); }catch(e){}
-			try{ target.innerText = answer; dispatchEvents(target); }catch(e){}
+			try{ target.innerText=''; dispatchEvents(target); }catch(e){}
+			try{ target.innerText=answer; dispatchEvents(target); }catch(e){}
 		} else {
-			const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
-			nativeSetter.call(target, '');
-			dispatchEvents(target);
-			nativeSetter.call(target, answer);
-			dispatchEvents(target);
+			nativeSetter.call(target,''); dispatchEvents(target);
+			nativeSetter.call(target,answer); dispatchEvents(target);
 		}
 		try{
-			target.dispatchEvent(new KeyboardEvent('keydown',  { key:'Enter', bubbles:true }));
-			target.dispatchEvent(new KeyboardEvent('keypress', { key:'Enter', bubbles:true }));
-			target.dispatchEvent(new KeyboardEvent('keyup',    { key:'Enter', bubbles:true }));
+			target.dispatchEvent(new KeyboardEvent('keydown',  {key:'Enter',bubbles:true}));
+			target.dispatchEvent(new KeyboardEvent('keypress', {key:'Enter',bubbles:true}));
+			target.dispatchEvent(new KeyboardEvent('keyup',    {key:'Enter',bubbles:true}));
 			if (target.form) try{ target.form.submit(); }catch(e){}
 		}catch(e){}
 		lastFilled = target;
@@ -135,16 +129,26 @@
 		}catch(e){ return null; }
 	}
 
-	/* ── SVG fraction detector ────────────────────────────────── */
+	/* ── SVG fraction detector (rectangle + pie) ──────────────── */
 
 	function detectSVGFraction(){
-		const svg = document.querySelector('svg.rectangle-fraction');
-		if (!svg) return null;
-		const rects = svg.querySelectorAll('rect');
-		const total = rects.length;
-		const colored = Array.from(rects).filter(r=>r.classList.contains('colored')).length;
-		if (total===0) return null;
-		return { numerator:colored, denominator:total };
+		// rectangle bars
+		const rectSvg = document.querySelector('svg.rectangle-fraction');
+		if (rectSvg){
+			const rects = rectSvg.querySelectorAll('rect');
+			const total = rects.length;
+			const colored = Array.from(rects).filter(r=>r.classList.contains('colored')).length;
+			if (total>0) return { numerator:colored, denominator:total };
+		}
+		// pie slices  ← NEW
+		const pieSvg = document.querySelector('svg.pie-fraction');
+		if (pieSvg){
+			const paths = pieSvg.querySelectorAll('path');
+			const total = paths.length;
+			const colored = Array.from(paths).filter(p=>p.classList.contains('colored')).length;
+			if (total>0) return { numerator:colored, denominator:total };
+		}
+		return null;
 	}
 
 	function fillFractionInputs(numerator, denominator){
@@ -152,21 +156,17 @@
 			const numInput = document.querySelector('input.fraction__input--numerator');
 			const denInput = document.querySelector('input.fraction__input--denominator');
 			if (!numInput||!denInput){ console.warn('[cheats] Fraction inputs not found'); resolve(); return; }
-
 			const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
 
 			function clickDigits(el, val){
-				// clear first
-				nativeSetter.call(el, '');
+				nativeSetter.call(el,'');
 				el.dispatchEvent(new Event('input',{bubbles:true}));
 				el.focus();
-				// try clicking on-screen keyboard buttons
-				String(val).split('').forEach(d => {
+				String(val).split('').forEach(d=>{
 					const btn = Array.from(document.querySelectorAll('.keyboard .buttons-row__button p'))
-						.find(p => p.textContent.trim()===d);
+						.find(p=>p.textContent.trim()===d);
 					if (btn) btn.parentElement.click();
 				});
-				// also set value directly as fallback
 				nativeSetter.call(el, String(val));
 				el.dispatchEvent(new Event('input',{bubbles:true}));
 				el.dispatchEvent(new Event('change',{bubbles:true}));
@@ -184,12 +184,113 @@
 		});
 	}
 
-	/* ── stats + timer + history ──────────────────────────────── */
+	/* ── timeout wrapper (stuck fix) ─────────────────────────── */
+
+	function withTimeout(fn, ms){
+		return new Promise(async resolve => {
+			let settled = false;
+			const timer = setTimeout(async ()=>{
+				if (settled) return;
+				settled = true;
+				console.warn('[cheats] Timed out — submitting wrong and moving on');
+				try{ await submitWrongAnswer(); }catch(e){}
+				resolve();
+			}, ms);
+			try{ await fn(); }catch(e){}
+			if (!settled){
+				settled = true;
+				clearTimeout(timer);
+				resolve();
+			}
+		});
+	}
+
+	/* ── confetti effect ──────────────────────────────────────── */
+
+	function spawnConfetti(){
+		const colors = ['#2ecc71','#3498db','#f39c12','#e74c3c','#9b59b6','#1abc9c','#f1c40f'];
+		for (let i=0; i<40; i++){
+			const el = document.createElement('div');
+			const size = 6 + Math.random()*8;
+			const x = Math.random()*window.innerWidth;
+			const rot = Math.random()*360;
+			const color = colors[Math.floor(Math.random()*colors.length)];
+			const drift = (Math.random()-0.5)*200;
+			el.style.cssText = `
+				position:fixed;left:${x}px;top:-20px;width:${size}px;height:${size}px;
+				background:${color};border-radius:${Math.random()>0.5?'50%':'2px'};
+				z-index:2147483646;pointer-events:none;
+				transform:rotate(${rot}deg);opacity:1;
+				transition:transform 1.2s ease-out, top 1.2s ease-out, opacity 1.2s ease-out, left 1.2s ease-out;
+			`;
+			document.body.appendChild(el);
+			requestAnimationFrame(()=>{
+				requestAnimationFrame(()=>{
+					el.style.top = (window.innerHeight*0.3 + Math.random()*window.innerHeight*0.5)+'px';
+					el.style.left = (x + drift)+'px';
+					el.style.opacity = '0';
+					el.style.transform = `rotate(${rot+360}deg)`;
+				});
+			});
+			setTimeout(()=>el.remove(), 1400);
+		}
+	}
+
+	/* ── dark mode ────────────────────────────────────────────── */
+
+	let __darkMode = false;
+	const DARK_STYLE_ID = 'cheats-dark-mode-style';
+
+	function toggleDarkMode(){
+		__darkMode = !__darkMode;
+		const existing = document.getElementById(DARK_STYLE_ID);
+		if (existing) existing.remove();
+		const btn = document.getElementById('cheats-dark-btn');
+		if (__darkMode){
+			const style = document.createElement('style');
+			style.id = DARK_STYLE_ID;
+			style.textContent = `
+				html, body, [class*="wrap"], [class*="game"], [class*="container"],
+				[class*="view"], [class*="panel"], [class*="card"], [class*="modal"],
+				[class*="header"], [class*="sidebar"], [class*="content"], [class*="main"],
+				[class*="layout"], [class*="page"] {
+					background-color: #12161e !important;
+					background-image: none !important;
+					color: #e2e8f0 !important;
+					border-color: #2d3748 !important;
+				}
+				input, textarea, select {
+					background: #1e2533 !important;
+					color: #e2e8f0 !important;
+					border-color: #2d3748 !important;
+				}
+				button:not([id^="cheats"]) {
+					filter: brightness(0.85) saturate(1.1);
+				}
+				svg rect.non-colored, svg path.non-colored {
+					fill: #2d3748 !important;
+				}
+				svg rect.colored, svg path.colored {
+					fill: #2ecc71 !important;
+				}
+				[class*="leaderboard"], [class*="score"], [class*="player"] {
+					background: #1e2533 !important;
+					color: #e2e8f0 !important;
+				}
+			`;
+			document.head.appendChild(style);
+			if (btn) btn.textContent = '☀️ Light Mode';
+		} else {
+			if (btn) btn.textContent = '🌙 Dark Mode';
+		}
+	}
+
+	/* ── stats + history ──────────────────────────────────────── */
 
 	let __stats = { correct:0, wrong:0, streak:0, bestStreak:0 };
-	let __history = []; // last 10 answers
+	let __history = [];
 	let __qStartTime = Date.now();
-	let __timings = []; // ms per correct answer
+	let __timings = [];
 
 	function startQuestionTimer(){ __qStartTime = Date.now(); }
 
@@ -201,12 +302,13 @@
 			__timings.push(elapsed);
 			if (__timings.length>20) __timings.shift();
 			if (__stats.streak>__stats.bestStreak) __stats.bestStreak=__stats.streak;
+			spawnConfetti();
 		} else {
 			__stats.wrong++;
 			__stats.streak=0;
 		}
 		if (questionText){
-			__history.unshift({ q: questionText, a: answerText, ok: isCorrect, ms: elapsed });
+			__history.unshift({q:questionText, a:answerText, ok:isCorrect, ms:elapsed});
 			if (__history.length>8) __history.pop();
 		}
 		updateStatsDisplay();
@@ -254,15 +356,15 @@
 
 	function updateHistoryDisplay(){
 		const el = document.getElementById('cheats-history-box');
-		if (!el || !__history.length) return;
+		if (!el||!__history.length) return;
 		el.innerHTML = `
 			<div style="font-size:10px;color:#6b8fa3;text-align:center;font-weight:700;margin-bottom:5px;letter-spacing:.8px;">📋 HISTORY</div>
 			${__history.slice(0,6).map(h=>`
 				<div style="display:flex;justify-content:space-between;align-items:center;
 					background:${h.ok?'#eafff1':'#fff0f0'};border-radius:5px;
 					padding:3px 6px;margin-bottom:3px;font-size:10px;overflow:hidden;">
-					<span style="color:#444;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100px;"
-						title="${h.q}">${h.q.length>14?h.q.slice(0,14)+'…':h.q}</span>
+					<span style="color:#444;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:95px;"
+						title="${h.q}">${h.q.length>13?h.q.slice(0,13)+'…':h.q}</span>
 					<span style="font-weight:700;color:${h.ok?'#27ae60':'#e74c3c'};margin-left:4px;">${h.a}</span>
 					<span style="color:#aaa;margin-left:4px;font-size:9px;">${h.ms}ms</span>
 				</div>
@@ -276,7 +378,7 @@
 		const frac = detectSVGFraction();
 		if (frac){
 			const label = `${frac.numerator}/${frac.denominator}`;
-			console.log('SVG Fraction:', label);
+			console.log('Fraction:', label);
 			recordAnswer(true, 'fraction', label);
 			await fillFractionInputs(frac.numerator, frac.denominator);
 			return;
@@ -293,7 +395,8 @@
 	async function submitWrongAnswer(){
 		const frac = detectSVGFraction();
 		if (frac){
-			const wrong = frac.numerator >= frac.denominator ? frac.numerator - 1 : frac.numerator + 1;
+			const wrong = frac.numerator >= frac.denominator
+				? frac.numerator - 1 : frac.numerator + 1;
 			recordAnswer(false, 'fraction', wrong+'/'+frac.denominator);
 			await fillFractionInputs(wrong, frac.denominator);
 			return;
@@ -316,7 +419,7 @@
 
 	function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
-	/* ── spam ─────────────────────────────────────────────────── */
+	/* ── spam (with stuck timeout) ────────────────────────────── */
 
 	let __spam_running = false;
 
@@ -329,7 +432,7 @@
 		__spam_running = true;
 		for (let i=0; i<count; i++){
 			if (!__spam_running) break;
-			await autoAnswerAndFill();
+			await withTimeout(()=>autoAnswerAndFill(), delay+500);
 			if (i<count-1) await sleep(delay);
 		}
 		__spam_running = false;
@@ -338,7 +441,7 @@
 
 	function stopSpam(){ __spam_running=false; }
 
-	/* ── reset score ──────────────────────────────────────────── */
+	/* ── reset score (with stuck timeout) ─────────────────────── */
 
 	let __reset_running = false;
 
@@ -353,9 +456,10 @@
 		console.log('Reset-score started');
 		while(__reset_running){
 			try{
-				await submitWrongAnswer(); await sleep(getDelay()); if(!__reset_running) break;
-				await submitWrongAnswer(); await sleep(getDelay()); if(!__reset_running) break;
-				await autoAnswerAndFill(); await sleep(getDelay());
+				const d = getDelay();
+				await withTimeout(()=>submitWrongAnswer(), d+500); await sleep(d); if(!__reset_running) break;
+				await withTimeout(()=>submitWrongAnswer(), d+500); await sleep(d); if(!__reset_running) break;
+				await withTimeout(()=>autoAnswerAndFill(), d+500); await sleep(d);
 			}catch(e){ console.error(e); __reset_running=false; }
 		}
 		console.log('Reset-score stopped');
@@ -374,6 +478,11 @@
 		padding:9px 0;background:linear-gradient(90deg,#ff6b6b,#e03131);
 		color:#fff;border:0;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;
 		box-shadow:0 4px 10px rgba(224,49,49,.3);transition:opacity .15s;">${label}</button>`;
+
+	const PURPLE_BTN = (id,label,extra='')=>`<button id="${id}" style="
+		padding:9px 0;background:linear-gradient(90deg,#a29bfe,#6c5ce7);
+		color:#fff;border:0;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;
+		box-shadow:0 4px 10px rgba(108,92,231,.3);transition:opacity .15s;${extra}">${label}</button>`;
 
 	const INPUT = (id,ph,w='100%')=>`<input id="${id}" type="number" min="1" placeholder="${ph}" style="
 		width:${w};padding:8px 6px;border:1px solid #d0e8ff;border-radius:7px;font-size:12px;
@@ -410,6 +519,10 @@
 			</div>
 
 			<div style="border-top:1px solid #dde8f5;padding-top:7px;">
+				${PURPLE_BTN('cheats-dark-btn','🌙 Dark Mode')}
+			</div>
+
+			<div style="border-top:1px solid #dde8f5;padding-top:7px;">
 				<div id="cheats-history-box" style="background:#f7fbff;border-radius:8px;padding:6px;border:1px solid #d0e8ff;">
 					<div style="font-size:10px;color:#6b8fa3;text-align:center;font-weight:700;letter-spacing:.8px;">📋 HISTORY</div>
 					<div style="font-size:10px;color:#8aabb0;text-align:center;padding:4px 0;">Answers appear here</div>
@@ -426,20 +539,21 @@
 			el.addEventListener('mouseenter',function(){this.style.opacity='.8';});
 			el.addEventListener('mouseleave',function(){this.style.opacity='1';});
 		};
-		['cheats-auto','cheats-spam','cheats-spam-stop','cheats-reset-start','cheats-reset-stop'].forEach(hover);
+		['cheats-auto','cheats-spam','cheats-spam-stop','cheats-reset-start','cheats-reset-stop','cheats-dark-btn'].forEach(hover);
 
-		panel.querySelector('#cheats-auto').addEventListener('click', ()=> autoAnswerAndFill());
+		panel.querySelector('#cheats-auto').addEventListener('click', ()=>autoAnswerAndFill());
 		panel.querySelector('#cheats-spam').addEventListener('click', ()=>{
 			const n  = document.getElementById('cheats-spam-count').value||1;
 			const ms = document.getElementById('cheats-interval').value;
 			spamAuto(n, ms);
 		});
-		panel.querySelector('#cheats-spam-stop').addEventListener('click', ()=> stopSpam());
+		panel.querySelector('#cheats-spam-stop').addEventListener('click', ()=>stopSpam());
 		panel.querySelector('#cheats-reset-start').addEventListener('click', ()=>{
 			const ms = document.getElementById('cheats-interval').value;
 			startResetScore(ms||800);
 		});
-		panel.querySelector('#cheats-reset-stop').addEventListener('click', ()=> stopResetScore());
+		panel.querySelector('#cheats-reset-stop').addEventListener('click', ()=>stopResetScore());
+		panel.querySelector('#cheats-dark-btn').addEventListener('click', ()=>toggleDarkMode());
 	}
 
 	function toggleOverlay(){
