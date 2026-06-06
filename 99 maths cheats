@@ -74,16 +74,70 @@
 		lastFilled = target;
 	}
 
-	/* ── question detection & solver ──────────────────────────── */
+/* ── SVG fraction detector ─────────────────────────────────── */
 
-	function detectQuestionText(){
-		const qSpecific = document.querySelector('.math99-game-question-view, .math99-game-inGame-question-view');
-		if (qSpecific){
-			const clone = qSpecific.cloneNode(true);
-			clone.querySelectorAll('img,svg,canvas,script,style,noscript,iframe').forEach(n=>n.remove());
-			const txt = (clone.textContent||clone.innerText||'').replace(/\s+/g,' ').trim();
-			if (txt) return txt;
-		}
+function detectSVGFraction(){
+    const svg = document.querySelector('svg.rectangle-fraction');
+    if (!svg) return null;
+    const rects = svg.querySelectorAll('rect');
+    const total = rects.length;
+    const colored = Array.from(rects).filter(r => r.classList.contains('colored')).length;
+    if (total === 0) return null;
+    return { numerator: colored, denominator: total };
+}
+
+function fillFractionInputs(numerator, denominator){
+    const numInput = document.querySelector('input.fraction__input--numerator');
+    const denInput = document.querySelector('input.fraction__input--denominator');
+    if (!numInput || !denInput){
+        console.warn('[cheats] Fraction inputs not found');
+        return;
+    }
+
+    function fillInput(el, val){
+        el.focus();
+        // click the on-screen keyboard buttons for each digit
+        const digits = String(val).split('');
+        for (const d of digits){
+            const btn = Array.from(document.querySelectorAll('.keyboard .buttons-row__button p'))
+                .find(p => p.textContent.trim() === d);
+            if (btn) btn.parentElement.click();
+        }
+        // also set value directly as fallback
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+            window.HTMLInputElement.prototype, 'value').set;
+        nativeInputValueSetter.call(el, String(val));
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    fillInput(numInput, numerator);
+    setTimeout(() => {
+        fillInput(denInput, denominator);
+        // submit
+        setTimeout(() => {
+            const submitBtn = document.querySelector('.button__submit');
+            if (submitBtn) submitBtn.click();
+        }, 150);
+    }, 150);
+}
+
+function autoAnswerAndFill(){
+    // try SVG fraction first
+    const frac = detectSVGFraction();
+    if (frac){
+        console.log('SVG Fraction:', frac.numerator + '/' + frac.denominator);
+        fillFractionInputs(frac.numerator, frac.denominator);
+        return;
+    }
+    // fallback to text solver
+    const q = detectQuestionText();
+    if (!q){ console.warn('[cheats] Could not detect a question.'); return; }
+    const ans = solveMathFromText(q);
+    if (ans===null){ console.warn('[cheats] Could not solve:', q); return; }
+    doAutofill(ans);
+    console.log('Auto:', q, '→', ans);
+}
 		const isQL = t=>{
 			if (!t) return false;
 			const s = t.replace(/\s+/g,' ').trim();
