@@ -4,15 +4,6 @@
 
 	Keyboard:
 	- Ctrl+Q: toggle overlay open/close
-
-	Exposed helpers:
-	- window.cheatsAutofill(answer)
-	- window.cheatsToggle()
-	- window.cheatsClearLast()
-	- window.cheatsSpamAuto(n, intervalMs)
-	- window.cheatsStopSpam()
-	- window.cheatsStartResetScore()
-	- window.cheatsStopResetScore()
 */
 
 (function(){
@@ -74,70 +65,16 @@
 		lastFilled = target;
 	}
 
-/* ── SVG fraction detector ─────────────────────────────────── */
+	/* ── question detection ───────────────────────────────────── */
 
-function detectSVGFraction(){
-    const svg = document.querySelector('svg.rectangle-fraction');
-    if (!svg) return null;
-    const rects = svg.querySelectorAll('rect');
-    const total = rects.length;
-    const colored = Array.from(rects).filter(r => r.classList.contains('colored')).length;
-    if (total === 0) return null;
-    return { numerator: colored, denominator: total };
-}
-
-function fillFractionInputs(numerator, denominator){
-    const numInput = document.querySelector('input.fraction__input--numerator');
-    const denInput = document.querySelector('input.fraction__input--denominator');
-    if (!numInput || !denInput){
-        console.warn('[cheats] Fraction inputs not found');
-        return;
-    }
-
-    function fillInput(el, val){
-        el.focus();
-        // click the on-screen keyboard buttons for each digit
-        const digits = String(val).split('');
-        for (const d of digits){
-            const btn = Array.from(document.querySelectorAll('.keyboard .buttons-row__button p'))
-                .find(p => p.textContent.trim() === d);
-            if (btn) btn.parentElement.click();
-        }
-        // also set value directly as fallback
-        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-            window.HTMLInputElement.prototype, 'value').set;
-        nativeInputValueSetter.call(el, String(val));
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-
-    fillInput(numInput, numerator);
-    setTimeout(() => {
-        fillInput(denInput, denominator);
-        // submit
-        setTimeout(() => {
-            const submitBtn = document.querySelector('.button__submit');
-            if (submitBtn) submitBtn.click();
-        }, 150);
-    }, 150);
-}
-
-function autoAnswerAndFill(){
-    // try SVG fraction first
-    const frac = detectSVGFraction();
-    if (frac){
-        console.log('SVG Fraction:', frac.numerator + '/' + frac.denominator);
-        fillFractionInputs(frac.numerator, frac.denominator);
-        return;
-    }
-    // fallback to text solver
-    const q = detectQuestionText();
-    if (!q){ console.warn('[cheats] Could not detect a question.'); return; }
-    const ans = solveMathFromText(q);
-    if (ans===null){ console.warn('[cheats] Could not solve:', q); return; }
-    doAutofill(ans);
-    console.log('Auto:', q, '→', ans);
-}
+	function detectQuestionText(){
+		const qSpecific = document.querySelector('.math99-game-question-view, .math99-game-inGame-question-view');
+		if (qSpecific){
+			const clone = qSpecific.cloneNode(true);
+			clone.querySelectorAll('img,svg,canvas,script,style,noscript,iframe').forEach(n=>n.remove());
+			const txt = (clone.textContent||clone.innerText||'').replace(/\s+/g,' ').trim();
+			if (txt) return txt;
+		}
 		const isQL = t=>{
 			if (!t) return false;
 			const s = t.replace(/\s+/g,' ').trim();
@@ -167,71 +104,190 @@ function autoAnswerAndFill(){
 		return null;
 	}
 
-function solveMathFromText(text){
-    if (!text) return null;
-    let s = text.toLowerCase()
-        .replace(/×|\u00d7/g,'*').replace(/÷|\u00f7/g,'/')
-        .replace(/\btimes\b|\bmultiplied by\b/g,'*')
-        .replace(/\bplus\b/g,'+').replace(/\bminus\b/g,'-')
-        .replace(/\bdivided by\b|\bover\b/g,'/')
-        .replace(/\bwhat is\b|\bwhat's\b|\bcalculate\b|\bsolve\b/g,'')
-        .replace(/(\d+(?:\.\d+)?)\s*%/g,'($1/100)')
-        // fraction: "3/4 of 20" → (3/4)*20
-        .replace(/(\d+)\s*\/\s*(\d+)\s*of\s*(\d+)/g,'($1/$2)*$3')
-        // mixed number: "2 3/4" → (2+3/4)
-        .replace(/(\d+)\s+(\d+)\s*\/\s*(\d+)/g,'($1+$2/$3)')
-        // "half of 20" → 0.5*20
-        .replace(/\bhalf of\s*(\d+)/g,'0.5*$1')
-        .replace(/\bquarter of\s*(\d+)/g,'0.25*$1')
-        .replace(/\bthird of\s*(\d+)/g,'(1/3)*$1')
-        // "20% of 50"
-        .replace(/(\d+(?:\.\d+)?)\s*%\s*of\s*(\d+(?:\.\d+)?)/g,'($1/100)*$2')
-        // squared/cubed
-        .replace(/(\d+)\s*\^\s*(\d+)/g,'Math.pow($1,$2)')
-        .replace(/(\d+)\s*squared/g,'Math.pow($1,2)')
-        .replace(/(\d+)\s*cubed/g,'Math.pow($1,3)')
-        .replace(/square root of\s*(\d+)/g,'Math.sqrt($1)')
-        .replace(/sqrt\s*\(?\s*(\d+)\s*\)?/g,'Math.sqrt($1)')
-        .replace(/(\d)\s*x\s*(\d)/g,'$1*$2')
-        .replace(/,/g,'')
-        .replace(/[^0-9\.\+\-\*\/\(\)\s]/g,' ')
-        .replace(/\s+/g,' ').trim();
+	/* ── math solver ──────────────────────────────────────────── */
 
-    if (!s) return null;
+	function solveMathFromText(text){
+		if (!text) return null;
+		let s = text.toLowerCase()
+			.replace(/×|\u00d7/g,'*').replace(/÷|\u00f7/g,'/')
+			.replace(/\btimes\b|\bmultiplied by\b/g,'*')
+			.replace(/\bplus\b/g,'+').replace(/\bminus\b/g,'-')
+			.replace(/\bdivided by\b|\bover\b/g,'/')
+			.replace(/\bwhat is\b|\bwhat's\b|\bcalculate\b|\bsolve\b/g,'')
+			.replace(/(\d+(?:\.\d+)?)\s*%\s*of\s*(\d+(?:\.\d+)?)/g,'($1/100)*$2')
+			.replace(/(\d+(?:\.\d+)?)\s*%/g,'($1/100)')
+			.replace(/(\d+)\s*\/\s*(\d+)\s*of\s*(\d+)/g,'($1/$2)*$3')
+			.replace(/(\d+)\s+(\d+)\s*\/\s*(\d+)/g,'($1+$2/$3)')
+			.replace(/\bhalf of\s*(\d+)/g,'0.5*$1')
+			.replace(/\bquarter of\s*(\d+)/g,'0.25*$1')
+			.replace(/\bthird of\s*(\d+)/g,'(1/3)*$1')
+			.replace(/(\d+)\s*\^\s*(\d+)/g,'Math.pow($1,$2)')
+			.replace(/(\d+)\s*squared/g,'Math.pow($1,2)')
+			.replace(/(\d+)\s*cubed/g,'Math.pow($1,3)')
+			.replace(/square root of\s*(\d+)/g,'Math.sqrt($1)')
+			.replace(/sqrt\s*\(?\s*(\d+)\s*\)?/g,'Math.sqrt($1)')
+			.replace(/(\d)\s*x\s*(\d)/g,'$1*$2')
+			.replace(/,/g,'')
+			.replace(/[^0-9\.\+\-\*\/\(\)\sMathpowsqrt\.]/g,' ')
+			.replace(/\s+/g,' ').trim();
+		if (!s) return null;
+		try{
+			const val = Function('"use strict"; return ('+s+')')();
+			if (typeof val==='number' && isFinite(val)){
+				const ri = Math.round(val);
+				if (Math.abs(val-ri)<1e-9) return String(ri);
+				for (let d=2; d<=12; d++){
+					const n = Math.round(val*d);
+					if (Math.abs(n/d - val)<1e-9) return n+'/'+d;
+				}
+				return val.toFixed(4).replace(/\.?0+$/,'');
+			}
+			return String(val);
+		}catch(e){ return null; }
+	}
 
-    // allow Math. calls through
-    if (!/^[-+()\d\.\/*\s]|Math\.(pow|sqrt)/.test(s) && !/^[-+()\d\.\/*\sMath.powsqrt]+$/.test(s)) return null;
+	/* ── SVG fraction detector ────────────────────────────────── */
 
-    try{
-        const val = Function('return ('+s+')')();
-        if (typeof val==='number' && isFinite(val)){
-            const ri = Math.round(val);
-            if (Math.abs(val-ri)<1e-9) return String(ri);
-            // return as fraction if it's a clean one
-            for (let d=2; d<=12; d++){
-                const n = Math.round(val*d);
-                if (Math.abs(n/d - val)<1e-9) return n+'/'+d;
-            }
-            let sv = val.toFixed(4).replace(/\.?0+$/,'');
-            return sv;
-        }
-        return String(val);
-    }catch(e){ return null; }
-}
-	function autoAnswerAndFill(){
+	function detectSVGFraction(){
+		const svg = document.querySelector('svg.rectangle-fraction');
+		if (!svg) return null;
+		const rects = svg.querySelectorAll('rect');
+		const total = rects.length;
+		const colored = Array.from(rects).filter(r => r.classList.contains('colored')).length;
+		if (total === 0) return null;
+		return { numerator: colored, denominator: total };
+	}
+
+	function fillFractionInputs(numerator, denominator){
+		return new Promise(resolve => {
+			const numInput = document.querySelector('input.fraction__input--numerator');
+			const denInput = document.querySelector('input.fraction__input--denominator');
+			if (!numInput || !denInput){ console.warn('[cheats] Fraction inputs not found'); resolve(); return; }
+
+			function clickDigits(el, val){
+				el.focus();
+				String(val).split('').forEach(d => {
+					const btn = Array.from(document.querySelectorAll('.keyboard .buttons-row__button p'))
+						.find(p => p.textContent.trim() === d);
+					if (btn) btn.parentElement.click();
+				});
+				const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
+				setter.call(el, String(val));
+				el.dispatchEvent(new Event('input',{bubbles:true}));
+			}
+
+			clickDigits(numInput, numerator);
+			setTimeout(() => {
+				clickDigits(denInput, denominator);
+				setTimeout(() => {
+					const submitBtn = document.querySelector('.button__submit');
+					if (submitBtn) submitBtn.click();
+					setTimeout(resolve, 100);
+				}, 150);
+			}, 150);
+		});
+	}
+
+	/* ── stats tracker ────────────────────────────────────────── */
+
+	let __stats = { correct:0, wrong:0, streak:0, bestStreak:0 };
+
+	function recordAnswer(isCorrect){
+		if (isCorrect){
+			__stats.correct++;
+			__stats.streak++;
+			if (__stats.streak > __stats.bestStreak) __stats.bestStreak = __stats.streak;
+		} else {
+			__stats.wrong++;
+			__stats.streak = 0;
+		}
+		updateStatsDisplay();
+	}
+
+	function updateStatsDisplay(){
+		const el = document.getElementById('cheats-stats-box');
+		if (!el) return;
+		const total = __stats.correct + __stats.wrong;
+		const acc = total ? Math.round((__stats.correct/total)*100) : 0;
+		el.innerHTML = `
+			<div style="font-size:10px;color:#6b8fa3;text-align:center;font-weight:600;margin-bottom:4px;letter-spacing:.5px;">STATS</div>
+			<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;text-align:center;">
+				<div style="background:#eafff1;border-radius:6px;padding:5px;">
+					<div style="font-size:18px;font-weight:700;color:#2ecc71;">${__stats.streak}</div>
+					<div style="font-size:9px;color:#6b8fa3;">STREAK</div>
+				</div>
+				<div style="background:#eafff1;border-radius:6px;padding:5px;">
+					<div style="font-size:18px;font-weight:700;color:#2ecc71;">${acc}%</div>
+					<div style="font-size:9px;color:#6b8fa3;">ACCURACY</div>
+				</div>
+				<div style="background:#f0f7ff;border-radius:6px;padding:5px;">
+					<div style="font-size:18px;font-weight:700;color:#3498db;">${__stats.correct}</div>
+					<div style="font-size:9px;color:#6b8fa3;">CORRECT</div>
+				</div>
+				<div style="background:#fff0f0;border-radius:6px;padding:5px;">
+					<div style="font-size:18px;font-weight:700;color:#e74c3c;">${__stats.wrong}</div>
+					<div style="font-size:9px;color:#6b8fa3;">WRONG</div>
+				</div>
+			</div>
+			<div style="font-size:9px;color:#8aabb0;text-align:center;margin-top:3px;">Best streak: ${__stats.bestStreak}</div>
+		`;
+	}
+
+	/* ── name changer (shows on host leaderboard) ─────────────── */
+
+	function changeName(newName){
+		if (!newName) return;
+		// patch all visible name text nodes
+		document.querySelectorAll('[class*=player-name],[class*=username],[class*=nickname],[class*=user-name],[class*=playerName]')
+			.forEach(el => { if (!el.children.length) el.textContent = newName; });
+		// try Vue reactivity on root app
+		const appEl = document.querySelector('#app, [data-v-app]');
+		if (appEl && appEl.__vue_app__){
+			try{
+				const store = appEl.__vue_app__.config.globalProperties.$store;
+				if (store && store.state){
+					const user = store.state.user || store.state.auth || store.state.player;
+					if (user){
+						if ('name'     in user) user.name     = newName;
+						if ('nickname' in user) user.nickname = newName;
+						if ('username' in user) user.username = newName;
+					}
+				}
+			}catch(e){}
+		}
+		console.log('[cheats] Name set to:', newName);
+	}
+
+	/* ── auto answer ──────────────────────────────────────────── */
+
+	async function autoAnswerAndFill(){
+		const frac = detectSVGFraction();
+		if (frac){
+			console.log('SVG Fraction:', frac.numerator+'/'+frac.denominator);
+			recordAnswer(true);
+			await fillFractionInputs(frac.numerator, frac.denominator);
+			return;
+		}
 		const q = detectQuestionText();
 		if (!q){ console.warn('[cheats] Could not detect a question.'); return; }
 		const ans = solveMathFromText(q);
 		if (ans===null){ console.warn('[cheats] Could not solve:', q); return; }
+		recordAnswer(true);
 		doAutofill(ans);
 		console.log('Auto:', q, '→', ans);
 	}
 
-	/* submits a deliberately wrong answer by adding 1 to the real answer */
-	function submitWrongAnswer(){
+	async function submitWrongAnswer(){
+		const frac = detectSVGFraction();
+		if (frac){
+			recordAnswer(false);
+			await fillFractionInputs(frac.numerator + 1, frac.denominator);
+			return;
+		}
 		const q = detectQuestionText();
 		const ans = q ? solveMathFromText(q) : null;
 		const wrong = ans !== null ? String(parseInt(ans,10)+1) : '99999';
+		recordAnswer(false);
 		doAutofill(wrong);
 		console.log('Wrong answer submitted:', wrong, '(correct was', ans+')');
 	}
@@ -246,7 +302,7 @@ function solveMathFromText(text){
 
 	function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
-	/* ── Spam ─────────────────────────────────────────────────── */
+	/* ── spam ─────────────────────────────────────────────────── */
 
 	let __spam_running = false;
 
@@ -259,7 +315,7 @@ function solveMathFromText(text){
 		__spam_running = true;
 		for (let i=0; i<count; i++){
 			if (!__spam_running) break;
-			autoAnswerAndFill();
+			await autoAnswerAndFill();
 			if (i < count-1) await sleep(delay);
 		}
 		__spam_running = false;
@@ -271,7 +327,7 @@ function solveMathFromText(text){
 		console.log('Spam stopped');
 	}
 
-	/* ── Reset-Score mode  (2 wrong → 1 right → repeat) ──────── */
+	/* ── reset score (2 wrong → 1 right → repeat) ────────────── */
 
 	let __reset_score_running = false;
 
@@ -286,19 +342,16 @@ function solveMathFromText(text){
 			return isFinite(v) && v>0 ? Math.round(v) : (intervalMs||800);
 		};
 
-		console.log('Reset-score started (2 wrong, 1 right, repeat)');
+		console.log('Reset-score started');
 		while(__reset_score_running){
 			try{
-				// wrong 1
-				submitWrongAnswer();
+				await submitWrongAnswer();
 				await sleep(getDelay());
 				if (!__reset_score_running) break;
-				// wrong 2
-				submitWrongAnswer();
+				await submitWrongAnswer();
 				await sleep(getDelay());
 				if (!__reset_score_running) break;
-				// right 1
-				autoAnswerAndFill();
+				await autoAnswerAndFill();
 				await sleep(getDelay());
 			}catch(e){
 				console.error('Reset-score error', e);
@@ -314,7 +367,7 @@ function solveMathFromText(text){
 		window.__cheats_reset_score_running = false;
 	}
 
-	/* ── Overlay ──────────────────────────────────────────────── */
+	/* ── overlay ──────────────────────────────────────────────── */
 
 	const BTN = (id, label, extra='')=>`
 		<button id="${id}" style="
@@ -336,9 +389,26 @@ function solveMathFromText(text){
 			transition:opacity .15s;
 		">${label}</button>`;
 
+	const BLUE_BTN = (id, label, extra='')=>`
+		<button id="${id}" style="
+			padding:9px 0;
+			background:linear-gradient(90deg,#74b9ff,#0984e3);
+			color:#fff;border:0;border-radius:8px;cursor:pointer;
+			font-size:13px;font-weight:600;
+			box-shadow:0 4px 10px rgba(9,132,227,.3);
+			transition:opacity .15s;${extra}
+		">${label}</button>`;
+
 	const INPUT = (id, ph, w='100%')=>`
 		<input id="${id}" type="number" min="1" placeholder="${ph}" style="
 			width:${w};padding:8px 6px;border:1px solid #d0e8ff;
+			border-radius:7px;font-size:12px;text-align:center;
+			background:#f7fbff;color:#102A43;outline:none;box-sizing:border-box;
+		"/>`;
+
+	const TEXT_INPUT = (id, ph)=>`
+		<input id="${id}" type="text" placeholder="${ph}" style="
+			width:100%;padding:8px 6px;border:1px solid #d0e8ff;
 			border-radius:7px;font-size:12px;text-align:center;
 			background:#f7fbff;color:#102A43;outline:none;box-sizing:border-box;
 		"/>`;
@@ -347,14 +417,23 @@ function solveMathFromText(text){
 		if (document.getElementById(OVERLAY_ID)) return;
 		const panel = document.createElement('div');
 		panel.id = OVERLAY_ID;
-		panel.style.cssText = 'position:fixed;right:14px;top:80px;z-index:2147483647;display:flex;flex-direction:column;gap:7px;align-items:stretch;font-family:Inter,Arial,sans-serif;width:170px;';
+		panel.style.cssText = `
+			position:fixed;right:14px;top:80px;z-index:2147483647;
+			display:flex;flex-direction:column;gap:7px;align-items:stretch;
+			font-family:Inter,Arial,sans-serif;width:180px;
+		`;
 
 		panel.innerHTML = `
-			${BTN('cheats-auto','Auto')}
+			<div id="cheats-stats-box" style="background:#f7fbff;border-radius:8px;padding:6px;border:1px solid #d0e8ff;">
+				<div style="font-size:10px;color:#6b8fa3;text-align:center;font-weight:600;margin-bottom:4px;letter-spacing:.5px;">STATS</div>
+				<div style="font-size:11px;color:#8aabb0;text-align:center;">No answers yet</div>
+			</div>
+
+			${BTN('cheats-auto','⚡ Auto Answer')}
 
 			<div style="display:flex;gap:5px;align-items:center;">
-				${INPUT('cheats-spam-count','# times','54px')}
-				${INPUT('cheats-interval','ms delay','54px')}
+				${INPUT('cheats-spam-count','#','50px')}
+				${INPUT('cheats-interval','ms','50px')}
 				${BTN('cheats-spam','Spam','flex:1;')}
 			</div>
 			${RED_BTN('cheats-spam-stop','■ Stop Spam')}
@@ -366,25 +445,31 @@ function solveMathFromText(text){
 				${RED_BTN('cheats-reset-stop','■ Stop Reset')}
 			</div>
 
+			<div style="border-top:1px solid #dde8f5;padding-top:7px;display:flex;flex-direction:column;gap:6px;">
+				<div style="font-size:10px;color:#6b8fa3;text-align:center;font-weight:600;letter-spacing:.5px;">✏️ CHANGE NAME</div>
+				<div style="font-size:10px;color:#8aabb0;text-align:center;">Shows on host leaderboard</div>
+				${TEXT_INPUT('cheats-name-input','New name...')}
+				${BLUE_BTN('cheats-name-btn','Set Name')}
+			</div>
+
 			<div style="font-size:10px;color:#8aabb0;text-align:center;letter-spacing:.3px;padding-top:2px;">Ctrl+Q to hide</div>
 		`;
 
 		document.body.appendChild(panel);
 
-		// hover helpers
 		const hover = id => {
 			const el = panel.querySelector('#'+id);
 			if (!el) return;
 			el.addEventListener('mouseenter', function(){ this.style.opacity='.8'; });
 			el.addEventListener('mouseleave', function(){ this.style.opacity='1'; });
 		};
-		['cheats-auto','cheats-spam','cheats-spam-stop','cheats-reset-start','cheats-reset-stop'].forEach(hover);
+		['cheats-auto','cheats-spam','cheats-spam-stop','cheats-reset-start','cheats-reset-stop','cheats-name-btn'].forEach(hover);
 
 		panel.querySelector('#cheats-auto').addEventListener('click', ()=> autoAnswerAndFill());
 
 		panel.querySelector('#cheats-spam').addEventListener('click', ()=>{
-			const n   = document.getElementById('cheats-spam-count').value || 1;
-			const ms  = document.getElementById('cheats-interval').value;
+			const n  = document.getElementById('cheats-spam-count').value || 1;
+			const ms = document.getElementById('cheats-interval').value;
 			spamAuto(n, ms);
 		});
 
@@ -396,6 +481,11 @@ function solveMathFromText(text){
 		});
 
 		panel.querySelector('#cheats-reset-stop').addEventListener('click', ()=> stopResetScore());
+
+		panel.querySelector('#cheats-name-btn').addEventListener('click', ()=>{
+			const name = document.getElementById('cheats-name-input').value.trim();
+			if (name) changeName(name);
+		});
 	}
 
 	function toggleOverlay(){
@@ -403,24 +493,23 @@ function solveMathFromText(text){
 		if (el) el.remove(); else createOverlay();
 	}
 
-	// Ctrl+Q toggle
 	document.addEventListener('keydown', function(e){
 		if (e.ctrlKey && e.key==='q'){ e.preventDefault(); toggleOverlay(); }
 	});
 
 	/* ── expose globals ───────────────────────────────────────── */
-	window.cheatsAutofill          = doAutofill;
-	window.cheatsClearLast         = clearLast;
-	window.cheatsAutoAnswer        = autoAnswerAndFill;
-	window.cheatsSpamAuto          = spamAuto;
-	window.cheatsStopSpam          = stopSpam;
-	window.cheatsStartResetScore   = startResetScore;
-	window.cheatsStopResetScore    = stopResetScore;
-	window.cheatsToggle            = toggleOverlay;
+	window.cheatsAutofill        = doAutofill;
+	window.cheatsClearLast       = clearLast;
+	window.cheatsAutoAnswer      = autoAnswerAndFill;
+	window.cheatsSpamAuto        = spamAuto;
+	window.cheatsStopSpam        = stopSpam;
+	window.cheatsStartResetScore = startResetScore;
+	window.cheatsStopResetScore  = stopResetScore;
+	window.cheatsToggle          = toggleOverlay;
+	window.cheatsChangeName      = changeName;
 
 	if (document.readyState==='complete'||document.readyState==='interactive') createOverlay();
 	else window.addEventListener('DOMContentLoaded', createOverlay);
 
 	console.log('Cheats UI loaded. Ctrl+Q to toggle.');
 })();
-
