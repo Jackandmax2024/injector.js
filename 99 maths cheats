@@ -1,583 +1,1152 @@
 /*
-	Console-ready cheats UI for 99maths.
-	Ctrl+Q to toggle overlay.
+  99mths Enhanced Cheats UI — v3.0
+  ─────────────────────────────────────────────────────────────────
+  Hotkeys:
+    Ctrl+Q  → toggle main overlay
+    Ctrl+A  → auto answer (no panel open needed)
+    Ctrl+D  → toggle debug panel
+
+  Solvers:
+    · Basic arithmetic  (+, -, ×, ÷, ^, sqrt, %)
+    · Missing number    (_ + 5 = 12, 3 × _ = 15 …)
+    · Comparison        (A __ B  →  > / < / =)
+    · SVG fractions     (rectangle + pie)
+    · Multiple choice   (numeric or text answer buttons)
+    · Number line       (range inputs + custom sliders)
+    · Word problems     (half of, quarter of, N% of …)
+    · Mixed numbers     (1 3/4 → 7/4)
+    · Decimals / negative numbers
+
+  New features vs v2:
+    · Confetti toggle
+    · Stars / reward animation suppressor
+    · Dark mode v2 (full-page CSS variables, much wider coverage)
+    · Debug panel (DOM scanner, live log, manual detect buttons,
+                   copy log, draggable)
+    · Settings persist to localStorage
+    · Answer preview box
+    · Spam + Reset status badges
+    · More submit-button / fraction-input selectors
+    · Ctrl+A shortcut
 */
 
-(function(){
-	if (window.__cheats_ui_loaded) { console.log('Cheats UI already loaded'); return; }
-	window.__cheats_ui_loaded = true;
+(function () {
+  if (window.__cheats_ui_loaded) {
+    console.log('[cheats] already loaded');
+    return;
+  }
+  window.__cheats_ui_loaded = true;
 
-	const OVERLAY_ID = 'cheats-ui-overlay-v1';
-	let lastFilled = null;
+  /* ═══════════════════════════════════════════════════════════════
+     CONSTANTS
+  ═══════════════════════════════════════════════════════════════ */
+  const OVERLAY_ID  = 'cheats-ui-overlay-v3';
+  const DEBUG_ID    = 'cheats-debug-panel-v3';
+  const DARK_ID     = 'cheats-dark-style';
+  const STAR_ID     = 'cheats-star-suppress';
+  const STORE_KEY   = 'cheats_cfg_v3';
 
-	/* ── core helpers ─────────────────────────────────────────── */
+  let lastFilled = null;
 
-	function dispatchEvents(el){
-		try{ el.dispatchEvent(new Event('input',  { bubbles:true })); }catch(e){}
-		try{ el.dispatchEvent(new Event('change', { bubbles:true })); }catch(e){}
-	}
+  /* ═══════════════════════════════════════════════════════════════
+     SETTINGS — persisted to localStorage
+  ═══════════════════════════════════════════════════════════════ */
+  const DEFAULTS = {
+    confetti  : true,
+    stars     : true,   // true = show, false = suppress
+    darkMode  : false,
+    autoSubmit: true,
+    preview   : true,
+  };
 
-	function isVisible(el){
-		return !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-	}
+  let CFG = { ...DEFAULTS };
 
-	function findBestField(){
-		const focused = document.activeElement;
-		const isRealInput = focused &&
-			focused.tagName==='INPUT' &&
-			focused.type!=='button' &&
-			focused.type!=='submit' &&
-			!focused.closest('#'+OVERLAY_ID);
-		if (isRealInput) return focused;
-		const inputs = Array.from(document.querySelectorAll('input[type=text], input:not([type]), textarea'))
-			.filter(i=>!i.closest('#'+OVERLAY_ID));
-		for (const i of inputs){
-			const rect = i.getBoundingClientRect();
-			if (rect.width>20 && rect.height>10 && isVisible(i)) return i;
-		}
-		const ce = document.querySelector('[contenteditable="true"]');
-		if (ce && isVisible(ce)) return ce;
-		return null;
-	}
+  function loadCfg() {
+    try { Object.assign(CFG, JSON.parse(localStorage.getItem(STORE_KEY) || '{}')); } catch (e) {}
+  }
+  function saveCfg() {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(CFG)); } catch (e) {}
+  }
+  loadCfg();
 
-	function doAutofill(answer){
-		const target = findBestField();
-		if (!target){ console.warn('[cheats] No input found.'); return; }
-		try{ target.focus(); }catch(e){}
-		const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
-		if (target.isContentEditable){
-			try{ target.innerText=''; dispatchEvents(target); }catch(e){}
-			try{ target.innerText=answer; dispatchEvents(target); }catch(e){}
-		} else {
-			nativeSetter.call(target,''); dispatchEvents(target);
-			nativeSetter.call(target,answer); dispatchEvents(target);
-		}
-		try{
-			target.dispatchEvent(new KeyboardEvent('keydown',  {key:'Enter',bubbles:true}));
-			target.dispatchEvent(new KeyboardEvent('keypress', {key:'Enter',bubbles:true}));
-			target.dispatchEvent(new KeyboardEvent('keyup',    {key:'Enter',bubbles:true}));
-			if (target.form) try{ target.form.submit(); }catch(e){}
-		}catch(e){}
-		lastFilled = target;
-	}
+  /* ═══════════════════════════════════════════════════════════════
+     CORE HELPERS
+  ═══════════════════════════════════════════════════════════════ */
+  function fire(el, ...events) {
+    events.forEach(type => {
+      try { el.dispatchEvent(new Event(type, { bubbles: true })); } catch (e) {}
+    });
+  }
 
-	/* ── question detection ───────────────────────────────────── */
+  function isVis(el) {
+    if (!el) return false;
+    const s = window.getComputedStyle(el);
+    if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) === 0) return false;
+    return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  }
 
-	function detectQuestionText(){
-		const qSpecific = document.querySelector('.math99-game-question-view, .math99-game-inGame-question-view');
-		if (qSpecific){
-			const clone = qSpecific.cloneNode(true);
-			clone.querySelectorAll('img,svg,canvas,script,style,noscript,iframe').forEach(n=>n.remove());
-			const txt = (clone.textContent||clone.innerText||'').replace(/\s+/g,' ').trim();
-			if (txt) return txt;
-		}
-		const isQL = t=>{
-			if (!t) return false;
-			const s = t.replace(/\s+/g,' ').trim();
-			return s.length>=3 && /[0-9].*[-+×x*\/÷]|\?|what|calculate|solve/i.test(s);
-		};
-		for (const s of ['[class*=question]','[id*=question]','[class*=task]','[class*=prompt]']){
-			const node=document.querySelector(s);
-			if(node&&isQL(node.innerText)) return node.innerText.trim();
-		}
-		for (const n of document.querySelectorAll('div,span,p')){
-			const t=n.innerText||n.textContent;
-			if(isQL(t)&&isVisible(n)) return t.trim();
-		}
-		return null;
-	}
+  function outsideUI(el) {
+    return !el.closest('#' + OVERLAY_ID) && !el.closest('#' + DEBUG_ID);
+  }
 
-	/* ── math solver ──────────────────────────────────────────── */
+  function bestInput() {
+    const f = document.activeElement;
+    if (f && f.tagName === 'INPUT' && !['button','submit','checkbox','radio'].includes(f.type) && outsideUI(f))
+      return f;
+    for (const i of document.querySelectorAll('input[type=text],input:not([type]),textarea')) {
+      if (!outsideUI(i)) continue;
+      const r = i.getBoundingClientRect();
+      if (r.width > 20 && r.height > 10 && isVis(i)) return i;
+    }
+    const ce = document.querySelector('[contenteditable="true"]');
+    if (ce && outsideUI(ce) && isVis(ce)) return ce;
+    return null;
+  }
 
-	function solveMathFromText(text){
-		if (!text) return null;
-		let s = text.toLowerCase()
-			.replace(/×|\u00d7/g,'*').replace(/÷|\u00f7/g,'/')
-			.replace(/\btimes\b|\bmultiplied by\b/g,'*')
-			.replace(/\bplus\b/g,'+').replace(/\bminus\b/g,'-')
-			.replace(/\bdivided by\b|\bover\b/g,'/')
-			.replace(/\bwhat is\b|\bwhat's\b|\bcalculate\b|\bsolve\b/g,'')
-			.replace(/(\d+(?:\.\d+)?)\s*%\s*of\s*(\d+(?:\.\d+)?)/g,'($1/100)*$2')
-			.replace(/(\d+(?:\.\d+)?)\s*%/g,'($1/100)')
-			.replace(/(\d+)\s*\/\s*(\d+)\s*of\s*(\d+)/g,'($1/$2)*$3')
-			.replace(/(\d+)\s+(\d+)\s*\/\s*(\d+)/g,'($1+$2/$3)')
-			.replace(/\bhalf of\s*(\d+)/g,'0.5*$1')
-			.replace(/\bquarter of\s*(\d+)/g,'0.25*$1')
-			.replace(/\bthird of\s*(\d+)/g,'(1/3)*$1')
-			.replace(/(\d+)\s*\^\s*(\d+)/g,'Math.pow($1,$2)')
-			.replace(/(\d+)\s*squared/g,'Math.pow($1,2)')
-			.replace(/(\d+)\s*cubed/g,'Math.pow($1,3)')
-			.replace(/square root of\s*(\d+)/g,'Math.sqrt($1)')
-			.replace(/sqrt\s*\(?\s*(\d+)\s*\)?/g,'Math.sqrt($1)')
-			.replace(/(\d)\s*x\s*(\d)/g,'$1*$2')
-			.replace(/,/g,'')
-			.replace(/[^0-9\.\+\-\*\/\(\)\sMathpowsqrt]/g,' ')
-			.replace(/\s+/g,' ').trim();
-		if (!s) return null;
-		try{
-			const val = Function('"use strict"; return ('+s+')')();
-			if (typeof val==='number' && isFinite(val)){
-				const ri = Math.round(val);
-				if (Math.abs(val-ri)<1e-9) return String(ri);
-				for (let d=2; d<=12; d++){
-					const n=Math.round(val*d);
-					if (Math.abs(n/d-val)<1e-9) return n+'/'+d;
-				}
-				return val.toFixed(4).replace(/\.?0+$/,'');
-			}
-			return String(val);
-		}catch(e){ return null; }
-	}
+  const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
 
-	/* ── SVG fraction detector (rectangle + pie) ──────────────── */
+  function setVal(el, v) {
+    nativeSetter.call(el, String(v));
+    fire(el, 'input', 'change');
+  }
 
-	function detectSVGFraction(){
-		// rectangle bars
-		const rectSvg = document.querySelector('svg.rectangle-fraction');
-		if (rectSvg){
-			const rects = rectSvg.querySelectorAll('rect');
-			const total = rects.length;
-			const colored = Array.from(rects).filter(r=>r.classList.contains('colored')).length;
-			if (total>0) return { numerator:colored, denominator:total };
-		}
-		// pie slices  ← NEW
-		const pieSvg = document.querySelector('svg.pie-fraction');
-		if (pieSvg){
-			const paths = pieSvg.querySelectorAll('path');
-			const total = paths.length;
-			const colored = Array.from(paths).filter(p=>p.classList.contains('colored')).length;
-			if (total>0) return { numerator:colored, denominator:total };
-		}
-		return null;
-	}
+  function pressEnter(el) {
+    ['keydown','keypress','keyup'].forEach(t =>
+      el.dispatchEvent(new KeyboardEvent(t, { key: 'Enter', bubbles: true })));
+    if (el.form) try { el.form.submit(); } catch (e) {}
+  }
 
-	function fillFractionInputs(numerator, denominator){
-		return new Promise(resolve => {
-			const numInput = document.querySelector('input.fraction__input--numerator');
-			const denInput = document.querySelector('input.fraction__input--denominator');
-			if (!numInput||!denInput){ console.warn('[cheats] Fraction inputs not found'); resolve(); return; }
-			const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
+  function doFill(answer) {
+    const t = bestInput();
+    if (!t) { dbg('WARN', 'no input found'); return; }
+    try { t.focus(); } catch (e) {}
+    if (t.isContentEditable) {
+      try { t.innerText = ''; fire(t, 'input', 'change'); } catch (e) {}
+      try { t.innerText = String(answer); fire(t, 'input', 'change'); } catch (e) {}
+    } else {
+      setVal(t, ''); setVal(t, answer);
+    }
+    if (CFG.autoSubmit) pressEnter(t);
+    lastFilled = t;
+    previewSet(answer);
+    dbg('FILL', `"${answer}" → ${t.tagName}[${t.type||'-'}]`);
+  }
 
-			function clickDigits(el, val){
-				nativeSetter.call(el,'');
-				el.dispatchEvent(new Event('input',{bubbles:true}));
-				el.focus();
-				String(val).split('').forEach(d=>{
-					const btn = Array.from(document.querySelectorAll('.keyboard .buttons-row__button p'))
-						.find(p=>p.textContent.trim()===d);
-					if (btn) btn.parentElement.click();
-				});
-				nativeSetter.call(el, String(val));
-				el.dispatchEvent(new Event('input',{bubbles:true}));
-				el.dispatchEvent(new Event('change',{bubbles:true}));
-			}
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-			clickDigits(numInput, numerator);
-			setTimeout(()=>{
-				clickDigits(denInput, denominator);
-				setTimeout(()=>{
-					const submitBtn = document.querySelector('.button__submit');
-					if (submitBtn) submitBtn.click();
-					setTimeout(resolve, 120);
-				}, 180);
-			}, 180);
-		});
-	}
+  /* ═══════════════════════════════════════════════════════════════
+     QUESTION DETECTION
+  ═══════════════════════════════════════════════════════════════ */
+  const Q_SELS = [
+    '.math99-game-question-view',
+    '.math99-game-inGame-question-view',
+    '[class*="question-view"]',
+    '[class*="questionView"]',
+    '[class*="inGame-question"]',
+    '[class*="game-question"]',
+    '[class*="question_view"]',
+    '[class*="questionText"]',
+    '[class*="question-text"]',
+    '[class*="task-text"]',
+    '[class*="problem-text"]',
+  ];
 
-	/* ── timeout wrapper (stuck fix) ─────────────────────────── */
+  function detectQ() {
+    for (const sel of Q_SELS) {
+      const node = document.querySelector(sel);
+      if (node) {
+        const clone = node.cloneNode(true);
+        clone.querySelectorAll('button,input,script,style,noscript,iframe').forEach(n => n.remove());
+        const txt = (clone.textContent || '').replace(/\s+/g, ' ').trim();
+        if (txt.length >= 2) { dbg('Q', `[${sel}] "${txt}"`); return txt; }
+      }
+    }
+    const isQL = t => t && /[0-9].*[-+×÷*\/=<>_?□]|[-+×÷*\/=<>_?□].*[0-9]|\?|what|calculate|solve|missing|find/i.test(t.replace(/\s+/g,' ').trim());
+    for (const sel of ['[class*=question]','[id*=question]','[class*=task]','[class*=prompt]','[class*=problem]']) {
+      const node = document.querySelector(sel);
+      if (node && isQL(node.innerText) && outsideUI(node)) { dbg('Q', `[${sel}] "${node.innerText.trim()}"`); return node.innerText.trim(); }
+    }
+    for (const n of document.querySelectorAll('div,span,p,h2,h3')) {
+      const t = (n.innerText || n.textContent || '').trim();
+      if (isQL(t) && isVis(n) && outsideUI(n) && t.length < 200) { dbg('Q', `[generic] "${t}"`); return t; }
+    }
+    return null;
+  }
 
-	function withTimeout(fn, ms){
-		return new Promise(async resolve => {
-			let settled = false;
-			const timer = setTimeout(async ()=>{
-				if (settled) return;
-				settled = true;
-				console.warn('[cheats] Timed out — submitting wrong and moving on');
-				try{ await submitWrongAnswer(); }catch(e){}
-				resolve();
-			}, ms);
-			try{ await fn(); }catch(e){}
-			if (!settled){
-				settled = true;
-				clearTimeout(timer);
-				resolve();
-			}
-		});
-	}
+  /* ═══════════════════════════════════════════════════════════════
+     SOLVERS
+  ═══════════════════════════════════════════════════════════════ */
 
-	/* ── confetti effect ──────────────────────────────────────── */
+  /* ── missing-number  (_ + 5 = 12, 3 × _ = 15, _ / 4 = 3) ── */
+  function solveMissing(text) {
+    let s = text
+      .replace(/×|\u00d7|\\times/g, '*').replace(/÷|\u00f7/g, '/')
+      .replace(/\s+/g, '')
+      .replace(/□|_+|missing|unknown/gi, '?');
 
-	function spawnConfetti(){
-		const colors = ['#2ecc71','#3498db','#f39c12','#e74c3c','#9b59b6','#1abc9c','#f1c40f'];
-		for (let i=0; i<40; i++){
-			const el = document.createElement('div');
-			const size = 6 + Math.random()*8;
-			const x = Math.random()*window.innerWidth;
-			const rot = Math.random()*360;
-			const color = colors[Math.floor(Math.random()*colors.length)];
-			const drift = (Math.random()-0.5)*200;
-			el.style.cssText = `
-				position:fixed;left:${x}px;top:-20px;width:${size}px;height:${size}px;
-				background:${color};border-radius:${Math.random()>0.5?'50%':'2px'};
-				z-index:2147483646;pointer-events:none;
-				transform:rotate(${rot}deg);opacity:1;
-				transition:transform 1.2s ease-out, top 1.2s ease-out, opacity 1.2s ease-out, left 1.2s ease-out;
-			`;
-			document.body.appendChild(el);
-			requestAnimationFrame(()=>{
-				requestAnimationFrame(()=>{
-					el.style.top = (window.innerHeight*0.3 + Math.random()*window.innerHeight*0.5)+'px';
-					el.style.left = (x + drift)+'px';
-					el.style.opacity = '0';
-					el.style.transform = `rotate(${rot+360}deg)`;
-				});
-			});
-			setTimeout(()=>el.remove(), 1400);
-		}
-	}
+    const configs = [
+      // ? OP b = c
+      { re: /^\?([+\-*\/])(-?[\d.]+)=(-?[\d.]+)$/, fn: (op,b,c) => {
+        [b,c] = [+b,+c];
+        if (op==='+') return c-b; if (op==='-') return c+b;
+        if (op==='*') return b ? c/b : null; if (op==='/') return c*b;
+      }},
+      // a OP ? = c
+      { re: /^(-?[\d.]+)([+\-*\/])\?=(-?[\d.]+)$/, fn: (a,op,c) => {
+        [a,c] = [+a,+c];
+        if (op==='+') return c-a; if (op==='-') return a-c;
+        if (op==='*') return a ? c/a : null; if (op==='/') return a ? a*c : null;
+      }},
+    ];
+    for (const { re, fn } of configs) {
+      const m = s.match(re);
+      if (m) {
+        const v = fn(...m.slice(1));
+        if (v !== null && isFinite(v)) {
+          const r = Math.round(v);
+          const ans = Math.abs(v - r) < 1e-9 ? String(r) : v.toFixed(4).replace(/\.?0+$/,'');
+          dbg('SOLVER', `missing → ${ans}`);
+          return ans;
+        }
+      }
+    }
+    return null;
+  }
 
-	/* ── dark mode ────────────────────────────────────────────── */
+  /* ── comparison  (A __ B → >/</=) ── */
+  function solveCompare(text) {
+    const s = text.replace(/×|\u00d7/g,'*').replace(/÷|\u00f7/g,'/');
+    const m = s.match(/([0-9+\-*\/\(\). ]+)\s*(?:__+|\?\?+|□)\s*([0-9+\-*\/\(\). ]+)/);
+    if (!m) return null;
+    try {
+      const L = Function('"use strict";return(' + m[1] + ')')();
+      const R = Function('"use strict";return(' + m[2] + ')')();
+      if (!isFinite(L) || !isFinite(R)) return null;
+      const r = L > R ? '>' : L < R ? '<' : '=';
+      dbg('SOLVER', `compare → ${r}`);
+      return r;
+    } catch (e) { return null; }
+  }
 
-	let __darkMode = false;
-	const DARK_STYLE_ID = 'cheats-dark-mode-style';
+  /* ── main math solver ── */
+  function solve(text) {
+    if (!text) return null;
 
-	function toggleDarkMode(){
-		__darkMode = !__darkMode;
-		const existing = document.getElementById(DARK_STYLE_ID);
-		if (existing) existing.remove();
-		const btn = document.getElementById('cheats-dark-btn');
-		if (__darkMode){
-			const style = document.createElement('style');
-			style.id = DARK_STYLE_ID;
-			style.textContent = `
-				html, body, [class*="wrap"], [class*="game"], [class*="container"],
-				[class*="view"], [class*="panel"], [class*="card"], [class*="modal"],
-				[class*="header"], [class*="sidebar"], [class*="content"], [class*="main"],
-				[class*="layout"], [class*="page"] {
-					background-color: #12161e !important;
-					background-image: none !important;
-					color: #e2e8f0 !important;
-					border-color: #2d3748 !important;
-				}
-				input, textarea, select {
-					background: #1e2533 !important;
-					color: #e2e8f0 !important;
-					border-color: #2d3748 !important;
-				}
-				button:not([id^="cheats"]) {
-					filter: brightness(0.85) saturate(1.1);
-				}
-				svg rect.non-colored, svg path.non-colored {
-					fill: #2d3748 !important;
-				}
-				svg rect.colored, svg path.colored {
-					fill: #2ecc71 !important;
-				}
-				[class*="leaderboard"], [class*="score"], [class*="player"] {
-					background: #1e2533 !important;
-					color: #e2e8f0 !important;
-				}
-			`;
-			document.head.appendChild(style);
-			if (btn) btn.textContent = '☀️ Light Mode';
-		} else {
-			if (btn) btn.textContent = '🌙 Dark Mode';
-		}
-	}
+    // 1. missing number
+    const miss = solveMissing(text);
+    if (miss !== null) return miss;
 
-	/* ── stats + history ──────────────────────────────────────── */
+    // 2. comparison
+    const cmp = solveCompare(text);
+    if (cmp !== null) return cmp;
 
-	let __stats = { correct:0, wrong:0, streak:0, bestStreak:0 };
-	let __history = [];
-	let __qStartTime = Date.now();
-	let __timings = [];
+    // 3. general eval
+    let s = text.toLowerCase()
+      .replace(/×|\u00d7/g,'*').replace(/÷|\u00f7/g,'/')
+      .replace(/\btimes\b|\bmultiplied by\b/g,'*')
+      .replace(/\bdivided by\b|\bover\b/g,'/')
+      .replace(/\bplus\b/g,'+').replace(/\bminus\b/g,'-')
+      .replace(/\bwhat is\b|\bwhat's\b|\bcalculate\b|\bsolve\b|\bfind\b/g,'')
+      .replace(/negative\s*(\d)/g,'-$1')
+      // percentages
+      .replace(/(\d+(?:\.\d+)?)\s*%\s*of\s*(\d+(?:\.\d+)?)/g,'($1/100)*$2')
+      .replace(/(\d+(?:\.\d+)?)\s*%/g,'($1/100)')
+      // fractions-of
+      .replace(/(\d+)\s*\/\s*(\d+)\s*of\s*(\d+)/g,'($1/$2)*$3')
+      // mixed numbers  e.g. "1 3/4"
+      .replace(/(\d+)\s+(\d+)\s*\/\s*(\d+)/g,'($1+$2/$3)')
+      // word fractions
+      .replace(/\bhalf of\s*(\d+)/g,'0.5*$1')
+      .replace(/\bquarter of\s*(\d+)/g,'0.25*$1')
+      .replace(/\bthird of\s*(\d+)/g,'(1/3)*$1')
+      // powers
+      .replace(/(\d+)\s*\^\s*(\d+)/g,'Math.pow($1,$2)')
+      .replace(/(\d+)\s*squared/g,'Math.pow($1,2)')
+      .replace(/(\d+)\s*cubed/g,'Math.pow($1,3)')
+      .replace(/square root of\s*(\d+)/g,'Math.sqrt($1)')
+      .replace(/sqrt\s*\(?\s*(\d+)\s*\)?/g,'Math.sqrt($1)')
+      // implicit multiply  "3x5"
+      .replace(/(\d)\s*x\s*(\d)/g,'$1*$2')
+      .replace(/,/g,'')
+      .replace(/[^0-9.\+\-\*\/\(\)\sMathpowsqrt]/g,' ')
+      .replace(/\s+/g,' ').trim();
 
-	function startQuestionTimer(){ __qStartTime = Date.now(); }
+    if (!s) return null;
+    try {
+      const v = Function('"use strict";return(' + s + ')')();
+      if (typeof v !== 'number' || !isFinite(v)) return String(v);
+      const ri = Math.round(v);
+      if (Math.abs(v - ri) < 1e-9) { dbg('SOLVER', `eval → ${ri}`); return String(ri); }
+      // try to express as simple fraction
+      for (let d = 2; d <= 16; d++) {
+        const n = Math.round(v * d);
+        if (Math.abs(n / d - v) < 1e-9) { dbg('SOLVER', `eval → ${n}/${d}`); return `${n}/${d}`; }
+      }
+      const r = v.toFixed(4).replace(/\.?0+$/,'');
+      dbg('SOLVER', `eval → ${r}`);
+      return r;
+    } catch (e) { dbg('SOLVER', `eval fail: ${e.message}`); return null; }
+  }
 
-	function recordAnswer(isCorrect, questionText, answerText){
-		const elapsed = Date.now() - __qStartTime;
-		if (isCorrect){
-			__stats.correct++;
-			__stats.streak++;
-			__timings.push(elapsed);
-			if (__timings.length>20) __timings.shift();
-			if (__stats.streak>__stats.bestStreak) __stats.bestStreak=__stats.streak;
-			spawnConfetti();
-		} else {
-			__stats.wrong++;
-			__stats.streak=0;
-		}
-		if (questionText){
-			__history.unshift({q:questionText, a:answerText, ok:isCorrect, ms:elapsed});
-			if (__history.length>8) __history.pop();
-		}
-		updateStatsDisplay();
-		updateHistoryDisplay();
-		startQuestionTimer();
-	}
+  /* ═══════════════════════════════════════════════════════════════
+     SVG FRACTION DETECTION  (rectangle + pie + generic)
+  ═══════════════════════════════════════════════════════════════ */
+  function detectFrac() {
+    // rectangle
+    for (const sel of ['svg.rectangle-fraction','[class*="rectangle-fraction"] svg']) {
+      const svg = document.querySelector(sel);
+      if (svg) {
+        const all = svg.querySelectorAll('rect'), col = [...all].filter(r => r.classList.contains('colored'));
+        if (all.length) { dbg('FRAC', `rect ${col.length}/${all.length}`); return { n: col.length, d: all.length, type: 'rect' }; }
+      }
+    }
+    // pie
+    for (const sel of ['svg.pie-fraction','[class*="pie-fraction"] svg']) {
+      const svg = document.querySelector(sel);
+      if (svg) {
+        const all = svg.querySelectorAll('path'), col = [...all].filter(p => p.classList.contains('colored'));
+        if (all.length) { dbg('FRAC', `pie ${col.length}/${all.length}`); return { n: col.length, d: all.length, type: 'pie' }; }
+      }
+    }
+    // generic: any SVG with .colored children
+    for (const svg of document.querySelectorAll('svg')) {
+      if (!outsideUI(svg)) continue;
+      const shapes = svg.querySelectorAll('rect,path,circle,polygon');
+      const col    = [...shapes].filter(e => e.classList.contains('colored'));
+      if (shapes.length > 1 && col.length > 0 && col.length < shapes.length) {
+        dbg('FRAC', `generic ${col.length}/${shapes.length}`);
+        return { n: col.length, d: shapes.length, type: 'generic' };
+      }
+    }
+    return null;
+  }
 
-	function avgTime(){
-		if (!__timings.length) return 0;
-		return Math.round(__timings.reduce((a,b)=>a+b,0)/__timings.length);
-	}
+  async function fillFrac(num, den) {
+    const numEl = document.querySelector([
+      'input.fraction__input--numerator',
+      '[class*="fraction"][class*="numerator"] input',
+      '[class*="numerator-input"]',
+      '[class*="numerator"] input',
+    ].join(','));
+    const denEl = document.querySelector([
+      'input.fraction__input--denominator',
+      '[class*="fraction"][class*="denominator"] input',
+      '[class*="denominator-input"]',
+      '[class*="denominator"] input',
+    ].join(','));
+    if (!numEl || !denEl) { dbg('WARN', 'fraction inputs missing'); return; }
 
-	function updateStatsDisplay(){
-		const el = document.getElementById('cheats-stats-box');
-		if (!el) return;
-		const total = __stats.correct+__stats.wrong;
-		const acc = total ? Math.round((__stats.correct/total)*100) : 0;
-		const avg = avgTime();
-		el.innerHTML = `
-			<div style="font-size:10px;color:#6b8fa3;text-align:center;font-weight:700;margin-bottom:5px;letter-spacing:.8px;">📊 STATS</div>
-			<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;text-align:center;">
-				<div style="background:#eafff1;border-radius:6px;padding:5px;">
-					<div style="font-size:20px;font-weight:700;color:#2ecc71;">${__stats.streak}</div>
-					<div style="font-size:9px;color:#6b8fa3;">STREAK</div>
-				</div>
-				<div style="background:#eafff1;border-radius:6px;padding:5px;">
-					<div style="font-size:20px;font-weight:700;color:#2ecc71;">${acc}%</div>
-					<div style="font-size:9px;color:#6b8fa3;">ACC</div>
-				</div>
-				<div style="background:#f0f7ff;border-radius:6px;padding:5px;">
-					<div style="font-size:20px;font-weight:700;color:#3498db;">${__stats.correct}</div>
-					<div style="font-size:9px;color:#6b8fa3;">CORRECT</div>
-				</div>
-				<div style="background:#fff0f0;border-radius:6px;padding:5px;">
-					<div style="font-size:20px;font-weight:700;color:#e74c3c;">${__stats.wrong}</div>
-					<div style="font-size:9px;color:#6b8fa3;">WRONG</div>
-				</div>
-			</div>
-			<div style="display:flex;justify-content:space-between;margin-top:5px;font-size:9px;color:#8aabb0;padding:0 2px;">
-				<span>🏆 Best: ${__stats.bestStreak}</span>
-				<span>⚡ Avg: ${avg?avg+'ms':'—'}</span>
-			</div>
-		`;
-	}
+    function typeDigits(el, val) {
+      setVal(el, ''); el.focus();
+      String(val).split('').forEach(d => {
+        const btn = [...document.querySelectorAll('.keyboard .buttons-row__button p,[class*="keypad"] button')]
+          .find(p => (p.textContent || '').trim() === d);
+        if (btn) (btn.parentElement || btn).click();
+      });
+      setVal(el, String(val));
+    }
+    typeDigits(numEl, num);
+    await sleep(180);
+    typeDigits(denEl, den);
+    await sleep(180);
+    const sub = document.querySelector([
+      '.button__submit',
+      '[class*="submit-btn"]',
+      '[class*="submitBtn"]',
+      '[class*="submit_button"]',
+      '[class*="check-answer"]',
+      'button[type=submit]',
+    ].join(','));
+    if (sub) sub.click();
+    await sleep(120);
+  }
 
-	function updateHistoryDisplay(){
-		const el = document.getElementById('cheats-history-box');
-		if (!el||!__history.length) return;
-		el.innerHTML = `
-			<div style="font-size:10px;color:#6b8fa3;text-align:center;font-weight:700;margin-bottom:5px;letter-spacing:.8px;">📋 HISTORY</div>
-			${__history.slice(0,6).map(h=>`
-				<div style="display:flex;justify-content:space-between;align-items:center;
-					background:${h.ok?'#eafff1':'#fff0f0'};border-radius:5px;
-					padding:3px 6px;margin-bottom:3px;font-size:10px;overflow:hidden;">
-					<span style="color:#444;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:95px;"
-						title="${h.q}">${h.q.length>13?h.q.slice(0,13)+'…':h.q}</span>
-					<span style="font-weight:700;color:${h.ok?'#27ae60':'#e74c3c'};margin-left:4px;">${h.a}</span>
-					<span style="color:#aaa;margin-left:4px;font-size:9px;">${h.ms}ms</span>
-				</div>
-			`).join('')}
-		`;
-	}
+  /* ═══════════════════════════════════════════════════════════════
+     MULTIPLE CHOICE DETECTION
+  ═══════════════════════════════════════════════════════════════ */
+  const MC_SELS = [
+    '[class*="answer-option"]','[class*="answerOption"]',
+    '[class*="choice-btn"]','[class*="choiceBtn"]',
+    '[class*="answer-btn"]','[class*="answerBtn"]',
+    '[class*="mc-button"]','[class*="mcButton"]',
+    '[class*="option-button"]','[class*="optionButton"]',
+    '[class*="quiz-answer"]','[class*="quizAnswer"]',
+    '[class*="answer-card"]','[class*="answerCard"]',
+    '[class*="selection-btn"]','[class*="selectionBtn"]',
+  ];
 
-	/* ── auto answer ──────────────────────────────────────────── */
+  function detectMC() {
+    for (const sel of MC_SELS) {
+      const btns = [...document.querySelectorAll(sel)].filter(b => outsideUI(b) && isVis(b));
+      if (btns.length >= 2) { dbg('MC', `${btns.length} via ${sel}`); return btns; }
+    }
+    // fallback: visible buttons whose text is pure numbers or simple fractions
+    const numBtns = [...document.querySelectorAll('button,[role=button]')]
+      .filter(b => outsideUI(b) && isVis(b) && /^-?\d+(\.\d+)?(\/\d+)?$/.test((b.textContent||'').trim()));
+    if (numBtns.length >= 2 && numBtns.length <= 6) { dbg('MC', `${numBtns.length} numeric fallback`); return numBtns; }
+    return null;
+  }
 
-	async function autoAnswerAndFill(){
-		const frac = detectSVGFraction();
-		if (frac){
-			const label = `${frac.numerator}/${frac.denominator}`;
-			console.log('Fraction:', label);
-			recordAnswer(true, 'fraction', label);
-			await fillFractionInputs(frac.numerator, frac.denominator);
-			return;
-		}
-		const q = detectQuestionText();
-		if (!q){ console.warn('[cheats] No question detected.'); return; }
-		const ans = solveMathFromText(q);
-		if (ans===null){ console.warn('[cheats] Could not solve:', q); return; }
-		recordAnswer(true, q, ans);
-		doAutofill(ans);
-		console.log('Auto:', q, '→', ans);
-	}
+  function pickMCBtn(q, btns) {
+    const ans = solve(q);
+    if (ans === null) return null;
+    const norm = s => s.replace(/\s+/g,'').toLowerCase();
+    const ca   = norm(ans);
+    const caNum = parseFloat(ans);
+    for (const btn of btns) {
+      const t = (btn.textContent || btn.innerText || '').trim();
+      if (norm(t) === ca) return btn;
+      if (isFinite(caNum) && Math.abs(parseFloat(t) - caNum) < 1e-9) return btn;
+    }
+    return null;
+  }
 
-	async function submitWrongAnswer(){
-		const frac = detectSVGFraction();
-		if (frac){
-			const wrong = frac.numerator >= frac.denominator
-				? frac.numerator - 1 : frac.numerator + 1;
-			recordAnswer(false, 'fraction', wrong+'/'+frac.denominator);
-			await fillFractionInputs(wrong, frac.denominator);
-			return;
-		}
-		const q = detectQuestionText();
-		const ans = q ? solveMathFromText(q) : null;
-		const wrong = ans !== null ? String(parseInt(ans,10)+1) : '99999';
-		recordAnswer(false, q||'?', wrong);
-		doAutofill(wrong);
-		console.log('Wrong submitted:', wrong);
-	}
+  /* ═══════════════════════════════════════════════════════════════
+     NUMBER LINE / RANGE INPUT
+  ═══════════════════════════════════════════════════════════════ */
+  function detectNL() {
+    for (const sel of ['[class*="number-line"] input[type=range]','[class*="numberLine"] input[type=range]','input[type=range]','[class*="slider"] input']) {
+      const el = document.querySelector(sel);
+      if (el && outsideUI(el) && isVis(el)) { dbg('NL', sel); return el; }
+    }
+    return null;
+  }
 
-	function clearLast(){
-		if (lastFilled){
-			if (lastFilled.isContentEditable) lastFilled.innerText=''; else lastFilled.value='';
-			dispatchEvents(lastFilled);
-			lastFilled=null;
-		}
-	}
+  function fillNL(el, ans) {
+    const mn = parseFloat(el.min) || 0, mx = parseFloat(el.max) || 100;
+    const v  = Math.max(mn, Math.min(mx, parseFloat(ans)));
+    setVal(el, v);
+    el.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));
+    dbg('NL', `set ${v}`);
+  }
 
-	function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+  /* ═══════════════════════════════════════════════════════════════
+     COMPARISON BUTTON DETECTION
+  ═══════════════════════════════════════════════════════════════ */
+  function detectCmpBtns() {
+    const ops = ['>', '<', '=', '≤', '≥', '≠'];
+    const found = [...document.querySelectorAll('button,[class*="operator"],[class*="symbol"]')]
+      .filter(el => outsideUI(el) && isVis(el) && ops.includes((el.textContent||'').trim()));
+    if (found.length) { dbg('CMP', found.map(b=>(b.textContent||'').trim()).join(' ')); return found; }
+    return null;
+  }
 
-	/* ── spam (with stuck timeout) ────────────────────────────── */
+  /* ═══════════════════════════════════════════════════════════════
+     TIMEOUT WRAPPER  (stuck-question fix)
+  ═══════════════════════════════════════════════════════════════ */
+  function withTimeout(fn, ms) {
+    return new Promise(async res => {
+      let done = false;
+      const t = setTimeout(async () => {
+        if (done) return; done = true;
+        dbg('WARN', `timeout ${ms}ms — submitting wrong`);
+        try { await wrongAnswer(); } catch (e) {}
+        res();
+      }, ms);
+      try { await fn(); } catch (e) { dbg('ERR', e.message); }
+      if (!done) { done = true; clearTimeout(t); res(); }
+    });
+  }
 
-	let __spam_running = false;
+  /* ═══════════════════════════════════════════════════════════════
+     CONFETTI
+  ═══════════════════════════════════════════════════════════════ */
+  function confetti() {
+    if (!CFG.confetti) return;
+    const cols = ['#2ecc71','#3498db','#f39c12','#e74c3c','#9b59b6','#1abc9c','#f1c40f'];
+    for (let i = 0; i < 40; i++) {
+      const el    = document.createElement('div');
+      const size  = 6 + Math.random() * 8;
+      const x     = Math.random() * window.innerWidth;
+      const rot   = Math.random() * 360;
+      const drift = (Math.random() - 0.5) * 200;
+      const color = cols[Math.floor(Math.random() * cols.length)];
+      el.className = '__cheats_confetti__';
+      el.style.cssText = `position:fixed;left:${x}px;top:-20px;width:${size}px;height:${size}px;
+        background:${color};border-radius:${Math.random()>.5?'50%':'2px'};
+        z-index:2147483646;pointer-events:none;transform:rotate(${rot}deg);opacity:1;
+        transition:transform 1.2s ease-out,top 1.2s ease-out,opacity 1.2s ease-out,left 1.2s ease-out;`;
+      document.body.appendChild(el);
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        el.style.top    = (window.innerHeight * 0.3 + Math.random() * window.innerHeight * 0.5) + 'px';
+        el.style.left   = (x + drift) + 'px';
+        el.style.opacity = '0';
+        el.style.transform = `rotate(${rot + 360}deg)`;
+      }));
+      setTimeout(() => el.remove(), 1400);
+    }
+  }
 
-	async function spamAuto(times, intervalMs){
-		if (__spam_running){ console.log('Spam already running'); return; }
-		const count = parseInt(times,10);
-		const delay = isFinite(parseInt(intervalMs,10)) && parseInt(intervalMs,10)>0
-			? parseInt(intervalMs,10) : 500;
-		if (!isFinite(count)||count<1) return;
-		__spam_running = true;
-		for (let i=0; i<count; i++){
-			if (!__spam_running) break;
-			await withTimeout(()=>autoAnswerAndFill(), delay+500);
-			if (i<count-1) await sleep(delay);
-		}
-		__spam_running = false;
-		console.log('Spam done');
-	}
+  /* ═══════════════════════════════════════════════════════════════
+     STAR / REWARD SUPPRESSOR
+  ═══════════════════════════════════════════════════════════════ */
+  function applyStarSup() {
+    let el = document.getElementById(STAR_ID);
+    if (!el) { el = document.createElement('style'); el.id = STAR_ID; document.head.appendChild(el); }
+    el.textContent = CFG.stars ? '' : `
+      [class*="star"],[class*="Star"],[class*="reward"],[class*="Reward"],
+      [class*="achievement"],[class*="Achievement"],[class*="badge"],[class*="Badge"],
+      [class*="celebration"],[class*="Celebration"],[class*="confetti"],[class*="Confetti"],
+      [class*="firework"],[class*="sparkle"],[class*="Sparkle"],[class*="trophy"],
+      [class*="particle"],[class*="Particle"],[class*="burst"],[class*="Burst"],
+      .__cheats_confetti__ {
+        display:none!important;visibility:hidden!important;opacity:0!important;
+        animation:none!important;transition:none!important;
+      }`;
+  }
 
-	function stopSpam(){ __spam_running=false; }
+  /* ═══════════════════════════════════════════════════════════════
+     DARK MODE V2  — broad CSS-variable + class coverage
+  ═══════════════════════════════════════════════════════════════ */
+  function applyDark() {
+    let el = document.getElementById(DARK_ID);
+    if (!el) { el = document.createElement('style'); el.id = DARK_ID; document.head.appendChild(el); }
+    if (!CFG.darkMode) { el.textContent = ''; return; }
+    el.textContent = `
+      /* ── root vars ──────────────────────── */
+      :root {
+        --bg:       #0e1117 !important;
+        --bg2:      #161b22 !important;
+        --bg3:      #1c2128 !important;
+        --border:   #30363d !important;
+        --text:     #c9d1d9 !important;
+        --text-dim: #8b949e !important;
+        --accent:   #58a6ff !important;
+        --green:    #2ecc71 !important;
+      }
+      /* ── html / body ────────────────────── */
+      html, body { background:#0e1117!important; color:#c9d1d9!important; }
+      /* ── broad class sweep ──────────────── */
+      [class*="wrap"],[class*="game"],[class*="container"],[class*="view"],
+      [class*="panel"],[class*="card"],[class*="modal"],[class*="header"],
+      [class*="sidebar"],[class*="content"],[class*="main"],[class*="layout"],
+      [class*="page"],[class*="screen"],[class*="section"],[class*="box"],
+      [class*="inner"],[class*="outer"],[class*="lobby"],[class*="room"],
+      [class*="area"],[class*="board"],[class*="field"],[class*="zone"],
+      [class*="overlay"],[class*="popup"],[class*="dialog"] {
+        background-color:#161b22!important;background-image:none!important;
+        color:#c9d1d9!important;border-color:#30363d!important;
+      }
+      /* ── question / task areas ──────────── */
+      [class*="question"],[class*="task"],[class*="prompt"],[class*="problem"],[class*="challenge"] {
+        background:#1c2128!important;color:#e6edf3!important;border-color:#30363d!important;
+      }
+      /* ── inputs ─────────────────────────── */
+      input,textarea,select {
+        background:#1c2128!important;color:#e6edf3!important;
+        border-color:#30363d!important;caret-color:#58a6ff!important;
+      }
+      input::placeholder,textarea::placeholder { color:#484f58!important; }
+      /* ── buttons (not cheat UI) ─────────── */
+      button:not([id^="cheats-"]):not([class*="cheats"]) {
+        background:#21262d!important;color:#c9d1d9!important;border-color:#30363d!important;
+        filter:none!important;
+      }
+      button:not([id^="cheats-"]):not([class*="cheats"]):hover {
+        background:#30363d!important;color:#e6edf3!important;
+      }
+      /* ── answer / choice buttons ─────────── */
+      [class*="answer"]:not([id^="cheats-"]),
+      [class*="choice"]:not([id^="cheats-"]),
+      [class*="option"]:not([id^="cheats-"]) {
+        background:#1c2128!important;color:#c9d1d9!important;border-color:#30363d!important;
+      }
+      /* ── SVG fractions ───────────────────── */
+      svg rect.non-colored,svg path.non-colored,svg circle.non-colored { fill:#30363d!important; }
+      svg rect.colored,svg path.colored,svg circle.colored             { fill:#2ecc71!important; }
+      /* ── leaderboard / scores ────────────── */
+      [class*="leaderboard"],[class*="score"],[class*="player"],
+      [class*="rank"],[class*="result"],[class*="leader"] {
+        background:#1c2128!important;color:#c9d1d9!important;
+      }
+      /* ── virtual keyboard ────────────────── */
+      [class*="keyboard"],[class*="numpad"],[class*="keypad"] {
+        background:#161b22!important;border-color:#30363d!important;
+      }
+      [class*="keyboard"] button,[class*="numpad"] button,[class*="keypad"] button {
+        background:#21262d!important;color:#c9d1d9!important;border-color:#30363d!important;
+      }
+      [class*="keyboard"] button:hover { background:#30363d!important; }
+      /* ── general text ────────────────────── */
+      p,span,div,label,h1,h2,h3,h4,h5,h6,li,td,th,a {
+        color:#c9d1d9!important;
+      }
+      a { color:#58a6ff!important; } a:hover { color:#79c0ff!important; }
+      hr,[class*="divider"],[class*="separator"] {
+        border-color:#30363d!important;background:#30363d!important;
+      }
+      /* ── no harsh shadows ────────────────── */
+      *:not([id^="cheats-"]):not([class*="cheats"]) {
+        box-shadow:none!important;text-shadow:none!important;
+      }
+    `;
+  }
 
-	/* ── reset score (with stuck timeout) ─────────────────────── */
+  /* ═══════════════════════════════════════════════════════════════
+     STATS + HISTORY
+  ═══════════════════════════════════════════════════════════════ */
+  const S = { correct: 0, wrong: 0, streak: 0, best: 0 };
+  let hist = [], timings = [], qStart = Date.now();
 
-	let __reset_running = false;
+  function startTimer() { qStart = Date.now(); }
 
-	async function startResetScore(intervalMs){
-		if (__reset_running){ return; }
-		__reset_running = true;
-		const getDelay = ()=>{
-			const el = document.getElementById('cheats-interval');
-			const v = el ? parseFloat(el.value) : NaN;
-			return isFinite(v)&&v>0 ? Math.round(v) : (intervalMs||800);
-		};
-		console.log('Reset-score started');
-		while(__reset_running){
-			try{
-				const d = getDelay();
-				await withTimeout(()=>submitWrongAnswer(), d+500); await sleep(d); if(!__reset_running) break;
-				await withTimeout(()=>submitWrongAnswer(), d+500); await sleep(d); if(!__reset_running) break;
-				await withTimeout(()=>autoAnswerAndFill(), d+500); await sleep(d);
-			}catch(e){ console.error(e); __reset_running=false; }
-		}
-		console.log('Reset-score stopped');
-	}
+  function record(ok, q, a) {
+    const ms = Date.now() - qStart;
+    if (ok) {
+      S.correct++; S.streak++; timings.push(ms); if (timings.length > 20) timings.shift();
+      if (S.streak > S.best) S.best = S.streak;
+      confetti();
+    } else { S.wrong++; S.streak = 0; }
+    if (q) { hist.unshift({ q, a, ok, ms }); if (hist.length > 12) hist.pop(); }
+    renderStats(); renderHistory(); previewSet('—'); startTimer();
+  }
 
-	function stopResetScore(){ __reset_running=false; }
+  function avgMs() {
+    return timings.length ? Math.round(timings.reduce((a, b) => a + b) / timings.length) : 0;
+  }
 
-	/* ── overlay ──────────────────────────────────────────────── */
+  function renderStats() {
+    const el = document.getElementById('ch-stats'); if (!el) return;
+    const tot = S.correct + S.wrong, acc = tot ? Math.round(S.correct / tot * 100) : 0, avg = avgMs();
+    const sc = S.streak >= 10 ? '#e74c3c' : S.streak >= 5 ? '#f39c12' : '#2ecc71';
+    el.innerHTML = `
+      <div style="font-size:9px;color:#6b8fa3;text-align:center;font-weight:700;margin-bottom:5px;letter-spacing:.8px;">📊 STATS</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;text-align:center;">
+        <div style="background:#eafff1;border-radius:6px;padding:5px;">
+          <div style="font-size:20px;font-weight:700;color:${sc};">${S.streak}${S.streak>=5?'🔥':''}</div>
+          <div style="font-size:9px;color:#6b8fa3;">STREAK</div>
+        </div>
+        <div style="background:#eafff1;border-radius:6px;padding:5px;">
+          <div style="font-size:20px;font-weight:700;color:#2ecc71;">${acc}%</div>
+          <div style="font-size:9px;color:#6b8fa3;">ACC</div>
+        </div>
+        <div style="background:#f0f7ff;border-radius:6px;padding:5px;">
+          <div style="font-size:20px;font-weight:700;color:#3498db;">${S.correct}</div>
+          <div style="font-size:9px;color:#6b8fa3;">CORRECT</div>
+        </div>
+        <div style="background:#fff0f0;border-radius:6px;padding:5px;">
+          <div style="font-size:20px;font-weight:700;color:#e74c3c;">${S.wrong}</div>
+          <div style="font-size:9px;color:#6b8fa3;">WRONG</div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:5px;font-size:9px;color:#8aabb0;padding:0 2px;">
+        <span>🏆 Best: ${S.best}</span>
+        <span>⚡ Avg: ${avg ? avg + 'ms' : '—'}</span>
+      </div>`;
+  }
 
-	const BTN = (id,label,extra='')=>`<button id="${id}" style="
-		padding:9px 0;background:linear-gradient(90deg,#7bd389,#2ecc71);
-		color:#fff;border:0;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;
-		box-shadow:0 4px 10px rgba(46,204,113,.3);transition:opacity .15s;${extra}">${label}</button>`;
+  function renderHistory() {
+    const el = document.getElementById('ch-hist'); if (!el || !hist.length) return;
+    el.innerHTML = `
+      <div style="font-size:9px;color:#6b8fa3;text-align:center;font-weight:700;margin-bottom:5px;letter-spacing:.8px;">📋 HISTORY</div>
+      ${hist.slice(0, 7).map(h => `
+        <div style="display:flex;justify-content:space-between;align-items:center;
+          background:${h.ok?'#eafff1':'#fff0f0'};border-radius:5px;padding:3px 6px;margin-bottom:2px;font-size:10px;">
+          <span style="color:#444;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:90px;"
+            title="${h.q.replace(/"/g,'')}">${h.q.length > 12 ? h.q.slice(0, 12) + '…' : h.q}</span>
+          <span style="font-weight:700;color:${h.ok?'#27ae60':'#e74c3c'};margin:0 4px;">${h.a}</span>
+          <span style="color:#aaa;font-size:9px;">${h.ms}ms</span>
+        </div>`).join('')}`;
+  }
 
-	const RED_BTN = (id,label)=>`<button id="${id}" style="
-		padding:9px 0;background:linear-gradient(90deg,#ff6b6b,#e03131);
-		color:#fff;border:0;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;
-		box-shadow:0 4px 10px rgba(224,49,49,.3);transition:opacity .15s;">${label}</button>`;
+  function previewSet(v) {
+    const el = document.getElementById('ch-preview');
+    if (el) el.textContent = v;
+  }
 
-	const PURPLE_BTN = (id,label,extra='')=>`<button id="${id}" style="
-		padding:9px 0;background:linear-gradient(90deg,#a29bfe,#6c5ce7);
-		color:#fff;border:0;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;
-		box-shadow:0 4px 10px rgba(108,92,231,.3);transition:opacity .15s;${extra}">${label}</button>`;
+  /* ═══════════════════════════════════════════════════════════════
+     AUTO ANSWER  (unified — tries all detectors in order)
+  ═══════════════════════════════════════════════════════════════ */
+  async function autoAnswer() {
+    startTimer();
+    dbg('AUTO', 'running…');
 
-	const INPUT = (id,ph,w='100%')=>`<input id="${id}" type="number" min="1" placeholder="${ph}" style="
-		width:${w};padding:8px 6px;border:1px solid #d0e8ff;border-radius:7px;font-size:12px;
-		text-align:center;background:#f7fbff;color:#102A43;outline:none;box-sizing:border-box;"/>`;
+    // 1. SVG fraction
+    const frac = detectFrac();
+    if (frac) {
+      const lbl = `${frac.n}/${frac.d}`;
+      dbg('AUTO', `fraction ${lbl}`);
+      previewSet(lbl); record(true, 'fraction', lbl);
+      await fillFrac(frac.n, frac.d);
+      return;
+    }
 
-	function createOverlay(){
-		if (document.getElementById(OVERLAY_ID)) return;
-		const panel = document.createElement('div');
-		panel.id = OVERLAY_ID;
-		panel.style.cssText = `position:fixed;right:14px;top:70px;z-index:2147483647;
-			display:flex;flex-direction:column;gap:7px;align-items:stretch;
-			font-family:Inter,Arial,sans-serif;width:185px;`;
+    const q = detectQ();
 
-		panel.innerHTML = `
-			<div id="cheats-stats-box" style="background:#f7fbff;border-radius:8px;padding:6px;border:1px solid #d0e8ff;">
-				<div style="font-size:10px;color:#6b8fa3;text-align:center;font-weight:700;letter-spacing:.8px;">📊 STATS</div>
-				<div style="font-size:11px;color:#8aabb0;text-align:center;padding:6px 0;">No answers yet</div>
-			</div>
+    // 2. Multiple choice
+    const mc = detectMC();
+    if (mc && q) {
+      const btn = pickMCBtn(q, mc);
+      if (btn) {
+        const a = (btn.textContent || btn.innerText || '').trim();
+        dbg('AUTO', `MC → ${a}`); previewSet(a); record(true, q, a);
+        btn.click(); return;
+      }
+    }
 
-			${BTN('cheats-auto','⚡ Auto Answer')}
+    // 3. Comparison buttons
+    if (q) {
+      const cmpResult = solveCompare(q);
+      if (cmpResult) {
+        const cmpBtns = detectCmpBtns();
+        if (cmpBtns) {
+          const btn = cmpBtns.find(b => (b.textContent || '').trim() === cmpResult);
+          if (btn) { dbg('AUTO', `cmp btn → ${cmpResult}`); previewSet(cmpResult); record(true, q, cmpResult); btn.click(); return; }
+        }
+        // fall through to text fill
+        dbg('AUTO', `cmp fill → ${cmpResult}`); previewSet(cmpResult); record(true, q, cmpResult);
+        doFill(cmpResult); return;
+      }
 
-			<div style="display:flex;gap:5px;align-items:center;">
-				${INPUT('cheats-spam-count','#','50px')}
-				${INPUT('cheats-interval','ms','50px')}
-				${BTN('cheats-spam','Spam','flex:1;padding:9px 4px;')}
-			</div>
-			${RED_BTN('cheats-spam-stop','■ Stop Spam')}
+      // 4. Number line
+      const nl = detectNL();
+      if (nl) {
+        const ans = solve(q);
+        if (ans !== null) {
+          dbg('AUTO', `NL → ${ans}`); previewSet(ans); record(true, q, ans);
+          fillNL(nl, ans); return;
+        }
+      }
 
-			<div style="border-top:1px solid #dde8f5;padding-top:7px;display:flex;flex-direction:column;gap:6px;">
-				<div style="font-size:10px;color:#6b8fa3;text-align:center;font-weight:700;letter-spacing:.5px;">🔄 RESET SCORE</div>
-				<div style="font-size:10px;color:#8aabb0;text-align:center;">2 wrong → 1 right → repeat</div>
-				${BTN('cheats-reset-start','▶ Start Reset')}
-				${RED_BTN('cheats-reset-stop','■ Stop Reset')}
-			</div>
+      // 5. Standard text fill
+      const ans = solve(q);
+      if (ans === null) { dbg('WARN', `unsolvable: "${q}"`); return; }
+      dbg('AUTO', `fill → ${ans}`); previewSet(ans); record(true, q, ans);
+      doFill(ans);
+    } else {
+      dbg('WARN', 'no question detected');
+    }
+  }
 
-			<div style="border-top:1px solid #dde8f5;padding-top:7px;">
-				${PURPLE_BTN('cheats-dark-btn','🌙 Dark Mode')}
-			</div>
+  async function wrongAnswer() {
+    const frac = detectFrac();
+    if (frac) {
+      const w = frac.n >= frac.d ? frac.n - 1 : frac.n + 1;
+      record(false, 'fraction', `${w}/${frac.d}`);
+      await fillFrac(w, frac.d); return;
+    }
+    const q   = detectQ();
+    const ans = q ? solve(q) : null;
+    const w   = ans !== null ? String(parseInt(ans, 10) + 1) : '99999';
+    record(false, q || '?', w);
+    doFill(w);
+    dbg('WRONG', w);
+  }
 
-			<div style="border-top:1px solid #dde8f5;padding-top:7px;">
-				<div id="cheats-history-box" style="background:#f7fbff;border-radius:8px;padding:6px;border:1px solid #d0e8ff;">
-					<div style="font-size:10px;color:#6b8fa3;text-align:center;font-weight:700;letter-spacing:.8px;">📋 HISTORY</div>
-					<div style="font-size:10px;color:#8aabb0;text-align:center;padding:4px 0;">Answers appear here</div>
-				</div>
-			</div>
+  /* ═══════════════════════════════════════════════════════════════
+     SPAM
+  ═══════════════════════════════════════════════════════════════ */
+  let spamRunning = false;
 
-			<div style="font-size:10px;color:#8aabb0;text-align:center;padding-top:2px;">Ctrl+Q to hide</div>
-		`;
+  async function spamAuto(n, ms) {
+    if (spamRunning) return;
+    const count = parseInt(n, 10) || 10;
+    const delay = (parseInt(ms, 10) > 0 ? parseInt(ms, 10) : 500);
+    spamRunning = true;
+    badge('ch-spam-status', true);
+    for (let i = 0; i < count; i++) {
+      if (!spamRunning) break;
+      spamProg(i + 1, count);
+      await withTimeout(() => autoAnswer(), delay + 600);
+      if (i < count - 1) await sleep(delay);
+    }
+    spamRunning = false;
+    badge('ch-spam-status', false);
+    spamProg(0, 0);
+    dbg('SPAM', 'done');
+  }
+  function stopSpam() { spamRunning = false; badge('ch-spam-status', false); }
+  function spamProg(cur, tot) {
+    const el = document.getElementById('ch-spam-prog');
+    if (el) el.textContent = (cur && tot) ? `${cur}/${tot}` : '';
+  }
 
-		document.body.appendChild(panel);
+  /* ═══════════════════════════════════════════════════════════════
+     RESET SCORE
+  ═══════════════════════════════════════════════════════════════ */
+  let resetRunning = false;
 
-		const hover = id=>{
-			const el=panel.querySelector('#'+id); if(!el) return;
-			el.addEventListener('mouseenter',function(){this.style.opacity='.8';});
-			el.addEventListener('mouseleave',function(){this.style.opacity='1';});
-		};
-		['cheats-auto','cheats-spam','cheats-spam-stop','cheats-reset-start','cheats-reset-stop','cheats-dark-btn'].forEach(hover);
+  async function startReset(ms) {
+    if (resetRunning) return;
+    resetRunning = true;
+    badge('ch-reset-status', true, '#e74c3c');
+    dbg('RESET', 'started');
+    const getD = () => {
+      const v = parseFloat((document.getElementById('ch-interval') || {}).value);
+      return isFinite(v) && v > 0 ? Math.round(v) : (ms || 800);
+    };
+    while (resetRunning) {
+      try {
+        const d = getD();
+        await withTimeout(() => wrongAnswer(), d + 600);  await sleep(d); if (!resetRunning) break;
+        await withTimeout(() => wrongAnswer(), d + 600);  await sleep(d); if (!resetRunning) break;
+        await withTimeout(() => autoAnswer(), d + 600);   await sleep(d);
+      } catch (e) { dbg('ERR', e.message); resetRunning = false; }
+    }
+    resetRunning = false;
+    badge('ch-reset-status', false);
+    dbg('RESET', 'stopped');
+  }
+  function stopReset() { resetRunning = false; badge('ch-reset-status', false); }
 
-		panel.querySelector('#cheats-auto').addEventListener('click', ()=>autoAnswerAndFill());
-		panel.querySelector('#cheats-spam').addEventListener('click', ()=>{
-			const n  = document.getElementById('cheats-spam-count').value||1;
-			const ms = document.getElementById('cheats-interval').value;
-			spamAuto(n, ms);
-		});
-		panel.querySelector('#cheats-spam-stop').addEventListener('click', ()=>stopSpam());
-		panel.querySelector('#cheats-reset-start').addEventListener('click', ()=>{
-			const ms = document.getElementById('cheats-interval').value;
-			startResetScore(ms||800);
-		});
-		panel.querySelector('#cheats-reset-stop').addEventListener('click', ()=>stopResetScore());
-		panel.querySelector('#cheats-dark-btn').addEventListener('click', ()=>toggleDarkMode());
-	}
+  /* ═══════════════════════════════════════════════════════════════
+     UI HELPERS
+  ═══════════════════════════════════════════════════════════════ */
+  function badge(id, on, color = '#2ecc71') {
+    const el = document.getElementById(id); if (!el) return;
+    el.textContent = on ? '🟢 Running' : '⚫ Idle';
+    el.style.color  = on ? color : '#8aabb0';
+  }
 
-	function toggleOverlay(){
-		const el=document.getElementById(OVERLAY_ID);
-		if(el) el.remove(); else createOverlay();
-	}
+  function tog(id, checked) {
+    return `<label style="display:flex;justify-content:space-between;align-items:center;
+      background:#f0f7ff;border-radius:7px;padding:5px 9px;cursor:pointer;border:1px solid #d0e8ff;">
+      <span style="font-size:11px;color:#2d3748;font-weight:500;">${id.label}</span>
+      <span style="display:inline-block;width:32px;height:17px;background:${checked?'#2ecc71':'#cbd5e0'};
+        border-radius:9px;position:relative;cursor:pointer;transition:background .2s;"
+        id="${id.span}" data-on="${checked?1:0}">
+        <span style="position:absolute;top:2px;left:${checked?'15px':'2px'};width:13px;height:13px;
+          background:#fff;border-radius:50%;transition:left .2s;box-shadow:0 1px 3px rgba(0,0,0,.3);"></span>
+      </span></label>`;
+  }
 
-	document.addEventListener('keydown', e=>{
-		if(e.ctrlKey && e.key==='q'){ e.preventDefault(); toggleOverlay(); }
-	});
+  function bindToggle(spanId, onFn) {
+    const el = document.getElementById(spanId); if (!el) return;
+    el.addEventListener('click', function () {
+      const on = this.dataset.on === '0';
+      this.dataset.on = on ? '1' : '0';
+      this.style.background = on ? '#2ecc71' : '#cbd5e0';
+      this.querySelector('span').style.left = on ? '15px' : '2px';
+      onFn(on);
+    });
+  }
 
-	/* ── expose globals ───────────────────────────────────────── */
-	window.cheatsAutofill        = doAutofill;
-	window.cheatsClearLast       = clearLast;
-	window.cheatsAutoAnswer      = autoAnswerAndFill;
-	window.cheatsSpamAuto        = spamAuto;
-	window.cheatsStopSpam        = stopSpam;
-	window.cheatsStartResetScore = startResetScore;
-	window.cheatsStopResetScore  = stopResetScore;
-	window.cheatsToggle          = toggleOverlay;
+  /* ═══════════════════════════════════════════════════════════════
+     DEBUG PANEL
+  ═══════════════════════════════════════════════════════════════ */
+  let logs = [];
 
-	startQuestionTimer();
-	if(document.readyState==='complete'||document.readyState==='interactive') createOverlay();
-	else window.addEventListener('DOMContentLoaded', createOverlay);
+  function dbg(type, msg) {
+    const entry = {
+      type, msg: String(msg),
+      t: new Date().toLocaleTimeString('en',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit',fractionalSecondDigits:1})
+    };
+    logs.unshift(entry); if (logs.length > 100) logs.pop();
+    const el = document.getElementById('dbg-log'); if (el) renderLog(el);
+    console.log(`[cheats:${type}]`, msg);
+  }
 
-	console.log('Cheats UI loaded. Ctrl+Q to toggle.');
+  const TYPE_COL = {
+    AUTO:'#2ecc71',SOLVER:'#3498db',FRAC:'#9b59b6',Q:'#f39c12',
+    MC:'#1abc9c',NL:'#e67e22',SPAM:'#3498db',RESET:'#e74c3c',
+    WRONG:'#e74c3c',WARN:'#f39c12',ERR:'#ff6b6b',INFO:'#8b949e',
+    FILL:'#58a6ff',CMP:'#27ae60',DOM:'#40b5a4',
+  };
+
+  function renderLog(el) {
+    el.innerHTML = logs.slice(0, 50).map(e => `
+      <div style="display:flex;gap:5px;margin-bottom:2px;font-size:10px;border-bottom:1px solid #1a2030;padding-bottom:2px;">
+        <span style="color:#374151;min-width:55px;flex-shrink:0;">${e.t}</span>
+        <span style="color:${TYPE_COL[e.type]||'#a0aec0'};font-weight:700;min-width:52px;flex-shrink:0;">${e.type}</span>
+        <span style="color:#c9d1d9;word-break:break-all;">${e.msg}</span>
+      </div>`).join('');
+  }
+
+  function debugScan() {
+    dbg('DOM', '── SCAN START ──');
+    const q   = detectQ();    dbg('DOM', `Q: ${q ? '"' + q + '"' : 'none'}`);
+    const f   = detectFrac(); dbg('DOM', `Frac: ${f ? f.n+'/'+f.d+'('+f.type+')' : 'none'}`);
+    const mc  = detectMC();   dbg('DOM', `MC: ${mc ? mc.length + ' btns [' + mc.map(b=>(b.textContent||'').trim().slice(0,6)).join(',') + ']' : 'none'}`);
+    const nl  = detectNL();   dbg('DOM', `NL: ${nl ? nl.tagName : 'none'}`);
+    const cb  = detectCmpBtns(); dbg('DOM', `CmpBtns: ${cb ? cb.map(b=>(b.textContent||'').trim()).join(' ') : 'none'}`);
+    dbg('DOM', `Inputs: ${[...document.querySelectorAll('input,textarea')].filter(outsideUI).length}`);
+    dbg('DOM', `SVGs: ${[...document.querySelectorAll('svg')].filter(outsideUI).length}`);
+    if (q) { const a = solve(q); dbg('DOM', `Answer: ${a !== null ? a : '[unsolved]'}`); }
+    dbg('DOM', '── SCAN END ──');
+    updateDbgState();
+  }
+
+  function updateDbgState() {
+    const el = document.getElementById('dbg-state'); if (!el) return;
+    const q   = detectQ(), f = detectFrac(), mc = detectMC(), ans = q ? solve(q) : null;
+    el.innerHTML = `
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:2px 8px;font-size:10px;">
+        <span style="color:#8b949e;">Q</span><span style="color:#e6edf3;word-break:break-all;">${q ? '"' + q.slice(0,38) + '"' : '<i style="color:#374151">none</i>'}</span>
+        <span style="color:#8b949e;">Ans</span><span style="color:#7ee787;">${ans !== null ? ans : '<i style="color:#374151">—</i>'}</span>
+        <span style="color:#8b949e;">Frac</span><span style="color:#d2a8ff;">${f ? f.n+'/'+f.d+'('+f.type+')' : '<i style="color:#374151">none</i>'}</span>
+        <span style="color:#8b949e;">MC</span><span style="color:#ffa657;">${mc ? mc.length + ' btns' : '<i style="color:#374151">none</i>'}</span>
+        <span style="color:#8b949e;">Spam</span><span style="color:${spamRunning?'#2ecc71':'#374151'};">${spamRunning ? 'running' : 'idle'}</span>
+        <span style="color:#8b949e;">Reset</span><span style="color:${resetRunning?'#e74c3c':'#374151'};">${resetRunning ? 'running' : 'idle'}</span>
+      </div>`;
+  }
+
+  function createDebugPanel() {
+    if (document.getElementById(DEBUG_ID)) return;
+    const p = document.createElement('div');
+    p.id = DEBUG_ID;
+    p.style.cssText = `position:fixed;left:12px;top:60px;z-index:2147483646;
+      background:#0d1117;border:1px solid #30363d;border-radius:10px;
+      font-family:monospace;width:350px;max-height:82vh;
+      display:flex;flex-direction:column;overflow:hidden;
+      box-shadow:0 10px 40px rgba(0,0,0,.7);`;
+
+    p.innerHTML = `
+      <!-- title bar -->
+      <div id="dbg-title" style="background:#161b22;padding:7px 10px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #30363d;cursor:move;user-select:none;">
+        <span style="color:#58a6ff;font-weight:700;font-size:12px;">🐛 DEBUG  <span style="color:#4a5568;font-size:10px;font-weight:400;">drag to move</span></span>
+        <div style="display:flex;gap:6px;">
+          <button id="dbg-btn-scan"  style="${DBG_BTN}color:#58a6ff;">🔍 Scan</button>
+          <button id="dbg-btn-copy"  style="${DBG_BTN}color:#7ee787;">📋 Copy</button>
+          <button id="dbg-btn-clear" style="${DBG_BTN}color:#ffa657;">🗑 Clear</button>
+          <button id="dbg-btn-close" style="${DBG_BTN}color:#ff6b6b;font-weight:700;">✕</button>
+        </div>
+      </div>
+      <!-- state -->
+      <div style="padding:8px;border-bottom:1px solid #1a2030;background:#0d1117;">
+        <div style="font-size:9px;color:#4a5568;margin-bottom:3px;letter-spacing:.8px;">DETECTED STATE</div>
+        <div id="dbg-state"></div>
+      </div>
+      <!-- quick actions -->
+      <div style="padding:6px 8px;border-bottom:1px solid #1a2030;display:flex;flex-wrap:wrap;gap:4px;">
+        ${['Detect Q','Detect Frac','Detect MC','Detect NL','Detect Cmp','Test Solve','List Inputs','List SVGs','List Btns'].map((lbl,i)=>`
+          <button class="dbg-qa" data-i="${i}" style="${DBG_BTN}color:#a5d6ff;padding:3px 5px;">${lbl}</button>`).join('')}
+      </div>
+      <!-- log -->
+      <div id="dbg-log" style="flex:1;overflow-y:auto;padding:8px;background:#0d1117;color:#c9d1d9;max-height:50vh;scrollbar-width:thin;scrollbar-color:#30363d #0d1117;"></div>`;
+
+    document.body.appendChild(p);
+
+    // draggable
+    let drag=false,ox=0,oy=0,px=0,py=0;
+    p.querySelector('#dbg-title').addEventListener('mousedown',e=>{drag=true;ox=e.clientX;oy=e.clientY;px=p.offsetLeft;py=p.offsetTop;e.preventDefault();});
+    document.addEventListener('mousemove',e=>{if(drag){p.style.left=(px+e.clientX-ox)+'px';p.style.top=(py+e.clientY-oy)+'px';}});
+    document.addEventListener('mouseup',()=>{drag=false;});
+
+    p.querySelector('#dbg-btn-close').addEventListener('click',()=>p.remove());
+    p.querySelector('#dbg-btn-clear').addEventListener('click',()=>{logs=[];renderLog(p.querySelector('#dbg-log'));});
+    p.querySelector('#dbg-btn-scan' ).addEventListener('click',()=>debugScan());
+    p.querySelector('#dbg-btn-copy' ).addEventListener('click',()=>{
+      navigator.clipboard.writeText(logs.map(e=>`[${e.t}] ${e.type}: ${e.msg}`).join('\n')).catch(()=>{});
+      dbg('INFO','log copied to clipboard');
+    });
+
+    p.querySelectorAll('.dbg-qa').forEach(btn=>btn.addEventListener('click',function(){
+      const i = +this.dataset.i;
+      if (i===0) { const q=detectQ(); dbg('DOM',q?'"'+q+'"':'none'); updateDbgState(); }
+      else if (i===1) { const f=detectFrac(); dbg('DOM',f?`${f.n}/${f.d}(${f.type})`:'none'); }
+      else if (i===2) { const m=detectMC(); dbg('DOM',m?`${m.length} [${m.map(b=>(b.textContent||'').trim().slice(0,6)).join(',')}]`:'none'); }
+      else if (i===3) { const nl=detectNL(); dbg('DOM',nl?`${nl.tagName}.${nl.className}`:'none'); }
+      else if (i===4) { const cb=detectCmpBtns(); dbg('DOM',cb?cb.map(b=>(b.textContent||'').trim()).join(','):'none'); const q=detectQ(); if(q) dbg('DOM','cmp='+solveCompare(q)); }
+      else if (i===5) { const q=detectQ(); dbg('DOM',q?'"'+q+'" → '+(solve(q)||'[unsolved]'):'no question'); }
+      else if (i===6) {
+        const inp=[...document.querySelectorAll('input,textarea')].filter(outsideUI);
+        dbg('DOM',`Inputs (${inp.length}):`);
+        inp.slice(0,10).forEach((e,j)=>dbg('DOM',`  [${j}] ${e.tagName} type=${e.type||'-'} cls="${e.className.slice(0,28)}" val="${(e.value||'').slice(0,18)}"`));
+      }
+      else if (i===7) {
+        const svgs=[...document.querySelectorAll('svg')].filter(outsideUI);
+        dbg('DOM',`SVGs (${svgs.length}):`);
+        svgs.slice(0,8).forEach((e,j)=>{
+          const r=e.querySelectorAll('rect').length,pt=e.querySelectorAll('path').length,c=e.querySelectorAll('.colored').length;
+          dbg('DOM',`  [${j}] cls="${e.className.slice?e.className.slice(0,22):''}" r=${r} p=${pt} col=${c}`);
+        });
+      }
+      else if (i===8) {
+        const btns=[...document.querySelectorAll('button')].filter(outsideUI).filter(isVis);
+        dbg('DOM',`Buttons (${btns.length}):`);
+        btns.slice(0,12).forEach((b,j)=>dbg('DOM',`  [${j}] "${(b.textContent||'').trim().slice(0,30)}" cls="${b.className.slice(0,24)}"`));
+      }
+    }));
+
+    renderLog(p.querySelector('#dbg-log'));
+    updateDbgState();
+  }
+
+  const DBG_BTN = `background:#1c2128;border:1px solid #30363d;border-radius:4px;padding:3px 6px;cursor:pointer;font-size:10px;font-family:monospace;`;
+
+  function toggleDebug() {
+    const el = document.getElementById(DEBUG_ID);
+    if (el) el.remove(); else createDebugPanel();
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+     MAIN OVERLAY
+  ═══════════════════════════════════════════════════════════════ */
+  function mkBtn(id, label, grad, shadow, extra = '') {
+    return `<button id="${id}" style="padding:8px 0;background:${grad};color:#fff;border:0;
+      border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;
+      box-shadow:0 3px 8px ${shadow};transition:opacity .15s;${extra}">${label}</button>`;
+  }
+  const G  = (id,lbl,x='') => mkBtn(id,lbl,'linear-gradient(90deg,#7bd389,#2ecc71)','rgba(46,204,113,.25)',x);
+  const R  = (id,lbl,x='') => mkBtn(id,lbl,'linear-gradient(90deg,#ff6b6b,#e03131)','rgba(224,49,49,.25)',x);
+  const V  = (id,lbl,x='') => mkBtn(id,lbl,'linear-gradient(90deg,#a29bfe,#6c5ce7)','rgba(108,92,231,.25)',x);
+  const GY = (id,lbl,x='') => mkBtn(id,lbl,'linear-gradient(90deg,#606472,#3a3d4d)','rgba(0,0,0,.2)',x);
+  const IN = (id,ph,w='100%') => `<input id="${id}" type="number" min="1" placeholder="${ph}"
+    style="width:${w};padding:7px 5px;border:1px solid #d0e8ff;border-radius:7px;font-size:11px;
+      text-align:center;background:#f7fbff;color:#102A43;outline:none;box-sizing:border-box;"/>`;
+
+  const SECTION = (title, body) =>
+    `<div style="background:#f7fbff;border-radius:9px;padding:8px;border:1px solid #d0e8ff;">
+      <div style="font-size:9px;color:#6b8fa3;font-weight:700;letter-spacing:.6px;margin-bottom:6px;">${title}</div>
+      ${body}
+    </div>`;
+
+  function createOverlay() {
+    if (document.getElementById(OVERLAY_ID)) return;
+    const p = document.createElement('div');
+    p.id = OVERLAY_ID;
+    p.style.cssText = `position:fixed;right:12px;top:60px;z-index:2147483647;
+      display:flex;flex-direction:column;gap:6px;align-items:stretch;
+      font-family:Inter,system-ui,sans-serif;width:192px;
+      max-height:92vh;overflow-y:auto;overflow-x:hidden;
+      scrollbar-width:thin;scrollbar-color:#b0c8d4 #e8f4fb;padding-right:2px;`;
+
+    p.innerHTML = `
+      <!-- header -->
+      <div style="background:linear-gradient(135deg,#1a2535,#0f1923);border-radius:10px;
+        padding:8px 12px;display:flex;justify-content:space-between;align-items:center;
+        box-shadow:0 4px 15px rgba(0,0,0,.4);">
+        <span style="color:#2ecc71;font-weight:800;font-size:14px;letter-spacing:.5px;">⚡ 99mths</span>
+        <span style="font-size:9px;color:#3a5c6a;font-family:monospace;">v3.0</span>
+      </div>
+
+      <!-- stats -->
+      <div id="ch-stats" style="background:#f7fbff;border-radius:9px;padding:8px;border:1px solid #d0e8ff;"></div>
+
+      <!-- answer preview -->
+      <div id="ch-preview-box" style="background:#f0fff4;border:1px solid #b7ebd0;border-radius:9px;
+        padding:6px 10px;text-align:center;${CFG.preview?'':'display:none'}">
+        <div style="font-size:9px;color:#6b8fa3;font-weight:700;letter-spacing:.8px;margin-bottom:2px;">NEXT ANSWER</div>
+        <div id="ch-preview" style="font-size:20px;font-weight:700;color:#2ecc71;min-height:26px;">—</div>
+      </div>
+
+      <!-- auto answer -->
+      ${G('ch-auto','⚡ Auto Answer','width:100%;font-size:13px;')}
+
+      <!-- spam -->
+      ${SECTION('📣 SPAM MODE',`
+        <div style="display:flex;gap:5px;margin-bottom:5px;">
+          ${IN('ch-count','count','48%')}${IN('ch-interval','ms','48%')}
+        </div>
+        <div style="display:flex;gap:5px;margin-bottom:4px;">
+          ${G('ch-spam','▶ Spam','flex:1;')}${R('ch-spam-stop','■','flex:0 0 36px;')}
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:9px;">
+          <span id="ch-spam-status" style="color:#8aabb0;">⚫ Idle</span>
+          <span id="ch-spam-prog"   style="color:#6b8fa3;"></span>
+        </div>`)}
+
+      <!-- reset score -->
+      <div style="background:#fff8f0;border-radius:9px;padding:8px;border:1px solid #ffdcb2;">
+        <div style="font-size:9px;color:#c07030;font-weight:700;letter-spacing:.6px;margin-bottom:2px;">🔄 RESET SCORE</div>
+        <div style="font-size:9px;color:#b08060;margin-bottom:5px;">wrong × 2 → right → repeat</div>
+        <div style="display:flex;gap:5px;margin-bottom:4px;">
+          ${G('ch-reset-start','▶ Start','flex:1;')}${R('ch-reset-stop','■','flex:0 0 36px;')}
+        </div>
+        <span id="ch-reset-status" style="font-size:9px;color:#8aabb0;">⚫ Idle</span>
+      </div>
+
+      <!-- settings toggles -->
+      ${SECTION('⚙️ SETTINGS',`
+        <div style="display:flex;flex-direction:column;gap:4px;">
+          ${tog({label:'Auto Submit', span:'tog-submit'}, CFG.autoSubmit)}
+          ${tog({label:'Confetti 🎉', span:'tog-confetti'}, CFG.confetti)}
+          ${tog({label:'Stars / Rewards ⭐', span:'tog-stars'}, CFG.stars)}
+          ${tog({label:'Answer Preview', span:'tog-preview'}, CFG.preview)}
+        </div>`)}
+
+      <!-- dark + debug -->
+      <div style="display:flex;gap:5px;">
+        ${V('ch-dark',CFG.darkMode?'☀️ Light':'🌙 Dark','flex:1;')}
+        ${GY('ch-debug','🐛 Debug','flex:1;')}
+      </div>
+
+      <!-- history -->
+      <div id="ch-hist" style="background:#f7fbff;border-radius:9px;padding:8px;border:1px solid #d0e8ff;">
+        <div style="font-size:9px;color:#6b8fa3;text-align:center;font-weight:700;letter-spacing:.8px;margin-bottom:4px;">📋 HISTORY</div>
+        <div style="font-size:10px;color:#8aabb0;text-align:center;padding:4px 0;">Answers appear here</div>
+      </div>
+
+      <!-- hotkeys -->
+      <div style="font-size:9px;color:#8aabb0;text-align:center;line-height:1.8;padding-bottom:4px;">
+        Ctrl+Q toggle · Ctrl+A auto · Ctrl+D debug
+      </div>`;
+
+    document.body.appendChild(p);
+
+    // hover fx
+    ['ch-auto','ch-spam','ch-spam-stop','ch-reset-start','ch-reset-stop','ch-dark','ch-debug'].forEach(id => {
+      const el = p.querySelector('#'+id); if (!el) return;
+      el.addEventListener('mouseenter',function(){this.style.opacity='.8';});
+      el.addEventListener('mouseleave',function(){this.style.opacity='1';});
+    });
+
+    p.querySelector('#ch-auto').addEventListener('click', autoAnswer);
+    p.querySelector('#ch-spam').addEventListener('click', () =>
+      spamAuto(document.getElementById('ch-count').value || 10, document.getElementById('ch-interval').value));
+    p.querySelector('#ch-spam-stop').addEventListener('click', stopSpam);
+    p.querySelector('#ch-reset-start').addEventListener('click', () =>
+      startReset(document.getElementById('ch-interval').value || 800));
+    p.querySelector('#ch-reset-stop').addEventListener('click', stopReset);
+    p.querySelector('#ch-dark').addEventListener('click', function () {
+      CFG.darkMode = !CFG.darkMode; applyDark(); saveCfg();
+      this.textContent = CFG.darkMode ? '☀️ Light' : '🌙 Dark';
+    });
+    p.querySelector('#ch-debug').addEventListener('click', toggleDebug);
+
+    bindToggle('tog-submit',  on => { CFG.autoSubmit = on; saveCfg(); });
+    bindToggle('tog-confetti',on => { CFG.confetti  = on; saveCfg(); });
+    bindToggle('tog-stars',   on => { CFG.stars     = on; applyStarSup(); saveCfg(); });
+    bindToggle('tog-preview', on => {
+      CFG.preview = on; saveCfg();
+      const box = document.getElementById('ch-preview-box');
+      if (box) box.style.display = on ? '' : 'none';
+    });
+
+    renderStats(); renderHistory();
+    if (CFG.darkMode) applyDark();
+    applyStarSup();
+    dbg('INFO', 'v3.0 loaded. Ctrl+Q | Ctrl+A | Ctrl+D');
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+     KEYBOARD SHORTCUTS
+  ═══════════════════════════════════════════════════════════════ */
+  document.addEventListener('keydown', e => {
+    if (e.ctrlKey && e.key === 'q') { e.preventDefault(); const el=document.getElementById(OVERLAY_ID); if(el)el.remove();else createOverlay(); }
+    if (e.ctrlKey && e.key === 'a') { e.preventDefault(); autoAnswer(); }
+    if (e.ctrlKey && e.key === 'd') { e.preventDefault(); toggleDebug(); }
+  });
+
+  /* ═══════════════════════════════════════════════════════════════
+     EXPOSE GLOBALS
+  ═══════════════════════════════════════════════════════════════ */
+  window.cheatsAutoAnswer  = autoAnswer;
+  window.cheatsWrong       = wrongAnswer;
+  window.cheatsSpam        = spamAuto;
+  window.cheatsStopSpam    = stopSpam;
+  window.cheatsStartReset  = startReset;
+  window.cheatsStopReset   = stopReset;
+  window.cheatsToggle      = () => { const el=document.getElementById(OVERLAY_ID); if(el)el.remove();else createOverlay(); };
+  window.cheatsDebug       = toggleDebug;
+  window.cheatsScan        = debugScanAll;
+  window.cheatsSolve       = solve;
+  window.cheatsDetectQ     = detectQ;
+  window.cheatsFrac        = detectFrac;
+  window.cheatsMC          = detectMC;
+  window.cheatsCFG         = CFG;
+
+  function debugScanAll() { debugScan(); }
+
+  /* ═══════════════════════════════════════════════════════════════
+     BOOT
+  ═══════════════════════════════════════════════════════════════ */
+  startTimer();
+  if (document.readyState === 'complete' || document.readyState === 'interactive') createOverlay();
+  else window.addEventListener('DOMContentLoaded', createOverlay);
+
+  console.log('%c⚡ 99mths Cheats v3.0', 'color:#2ecc71;font-weight:bold;font-size:15px;');
+  console.log('Ctrl+Q  toggle panel | Ctrl+A  auto answer | Ctrl+D  debug');
+  console.log('cheatsAutoAnswer() | cheatsSpam(n,ms) | cheatsScan() | cheatsCFG');
+
 })();
