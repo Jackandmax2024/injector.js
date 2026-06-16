@@ -1,0 +1,138 @@
+// autotype_fixed.js – Works with Monkeytype (correct letters)
+(function() {
+    let active = false;
+    let currentWord = '';
+    let speed = 15; // characters per second
+    let checkInterval = null;
+    let ui = null;
+
+    function getActiveWord() {
+        const el = document.querySelector('.word.active');
+        return el ? el.innerText.trim() : null;
+    }
+
+    function getInputElement() {
+        return document.getElementById('wordsInput') || document.querySelector('[contenteditable="true"]');
+    }
+
+    async function typeCharacter(char, target) {
+        if (!target) return false;
+        target.focus();
+        // Insert character using execCommand (works like real typing)
+        document.execCommand('insertText', false, char);
+        // Also dispatch a few events for good measure
+        target.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
+        target.dispatchEvent(new KeyboardEvent('keypress', { key: char, bubbles: true }));
+        target.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
+        return true;
+    }
+
+    async function typeWord(word, inputEl) {
+        for (let i = 0; i < word.length; i++) {
+            if (!active) return false;
+            await typeCharacter(word[i], inputEl);
+            await new Promise(r => setTimeout(r, 1000 / speed));
+        }
+        // Send space (Monkeytype uses space to move to next word)
+        document.execCommand('insertText', false, ' ');
+        inputEl.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space', keyCode: 32, bubbles: true }));
+        inputEl.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', code: 'Space', keyCode: 32, bubbles: true }));
+        return true;
+    }
+
+    async function run() {
+        if (!active) return;
+        const word = getActiveWord();
+        if (!word) {
+            updateStatus('Waiting...');
+            await new Promise(r => setTimeout(r, 500));
+            if (!getActiveWord()) stopAutoType();
+            else run();
+            return;
+        }
+        if (word === currentWord) {
+            await new Promise(r => setTimeout(r, 100));
+            run();
+            return;
+        }
+        currentWord = word;
+        updateStatus(`Typing: ${word}`);
+        const input = getInputElement();
+        if (!input) { stopAutoType(); return; }
+        await typeWord(word, input);
+        if (active) setTimeout(run, 80);
+    }
+
+    function start() {
+        if (active) return;
+        active = true;
+        currentWord = '';
+        updateStatus('Starting...');
+        run();
+        checkInterval = setInterval(() => {
+            if (active && !getActiveWord()) run();
+        }, 2000);
+    }
+
+    function stop() {
+        active = false;
+        if (checkInterval) clearInterval(checkInterval);
+        updateStatus('Stopped');
+    }
+
+    function createUI() {
+        if (ui) ui.remove();
+        ui = document.createElement('div');
+        ui.id = 'autotype-ui';
+        ui.style.cssText = `
+            position: fixed; bottom: 20px; left: 20px; z-index: 99999;
+            background: #1e1e1e; color: #0f0; font-family: monospace;
+            padding: 12px 18px; border-radius: 12px; border: 1px solid #0f0;
+            width: 260px; backdrop-filter: blur(4px); cursor: move;
+        `;
+        ui.innerHTML = `
+            <div><b>🤖 AUTO-TYPER</b></div>
+            <div>Speed: <input type="range" id="atspeed" min="5" max="40" value="${speed}" step="1">
+            <span id="speedval">${speed}</span> cps</div>
+            <div style="display:flex; gap:8px; margin:8px 0">
+                <button id="atstart" style="background:#0f0;border:none;padding:4px 12px;">START</button>
+                <button id="atstop" style="background:#f00;border:none;padding:4px 12px;color:#fff;">STOP</button>
+            </div>
+            <div id="atstatus">Status: IDLE</div>
+        `;
+        document.body.appendChild(ui);
+
+        document.getElementById('atstart').onclick = start;
+        document.getElementById('atstop').onclick = stop;
+        const slider = document.getElementById('atspeed');
+        slider.oninput = (e) => {
+            speed = parseInt(e.target.value);
+            document.getElementById('speedval').innerText = speed;
+        };
+
+        // Draggable
+        let offsetX, offsetY;
+        ui.onmousedown = (e) => {
+            if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
+            offsetX = e.clientX - ui.offsetLeft;
+            offsetY = e.clientY - ui.offsetTop;
+            document.onmousemove = (m) => {
+                ui.style.left = (m.clientX - offsetX) + 'px';
+                ui.style.top = (m.clientY - offsetY) + 'px';
+                ui.style.bottom = 'auto';
+                ui.style.right = 'auto';
+            };
+            document.onmouseup = () => { document.onmousemove = null; };
+        };
+    }
+
+    function updateStatus(msg) {
+        const s = document.getElementById('atstatus');
+        if (s) s.innerText = `Status: ${msg}`;
+        console.log('[AutoType]', msg);
+    }
+
+    createUI();
+    updateStatus('Ready. Start a test on Monkeytype.');
+    window.autoTyper = { start, stop };
+})();
