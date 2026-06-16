@@ -39,7 +39,7 @@ javascript:fetch('https://raw.githubusercontent.com/Jackandmax2024/injector.js/m
     },
 
     script8: function () {
-     
+    (function(){fetch('https://raw.githubusercontent.com/Jackandmax2024/injector.js/refs/heads/main/Monkeytype cheats').then(r=>r.text()).then(t=>{var s=document.createElement('script');s.text=t;document.body.appendChild(s);}).catch(e=>console.error(e));})(); 
     },
 
     script9: function () {
@@ -78,7 +78,7 @@ javascript:fetch('https://raw.githubusercontent.com/Jackandmax2024/injector.js/m
     {
       label: 'Group 3',         // ← rename this group
       games: [
-        { key: 'script8',  icon: '🎮', label: 'Script 8'  },
+        { key: 'script8',  icon: '🎮', label: 'monkeytype auto type'  },
         { key: 'script9',  icon: '🎮', label: 'Script 9'  },
         { key: 'script10', icon: '🎮', label: 'Script 10' },
       ],
