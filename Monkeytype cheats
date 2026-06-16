@@ -1,10 +1,16 @@
-// autotype_fixed.js – Works with Monkeytype (correct letters)
+// monkey_assistant_every_letter.js – Auto-correct for every character
 (function() {
-    let active = false;
+    'use strict';
+
+    let autoTypeActive = false;
+    let correctActive = false;
     let currentWord = '';
-    let speed = 15; // characters per second
-    let checkInterval = null;
+    let speed = 60;
     let ui = null;
+    let uiVisible = true;
+    let beforeInputHandler = null;
+    let isAutoTyping = false;
+    let isCorrecting = false;
 
     function getActiveWord() {
         const el = document.querySelector('.word.active');
@@ -15,71 +21,155 @@
         return document.getElementById('wordsInput') || document.querySelector('[contenteditable="true"]');
     }
 
+    function startAutoCorrect() {
+        if (beforeInputHandler) stopAutoCorrect();
+        const input = getInputElement();
+        if (!input) {
+            updateStatus('Error: input element not found');
+            return;
+        }
+        beforeInputHandler = (e) => {
+            if (!correctActive) return;
+            if (isAutoTyping) return;
+            if (isCorrecting) return;   // ignore our own correction events
+            if (e.inputType !== 'insertText') return;
+            if (!e.data || e.data.length !== 1) return;
+
+            const targetWord = getActiveWord();
+            if (!targetWord) return;
+
+            const inputEl = getInputElement();
+            if (!inputEl) return;
+
+            // Get the current text content exactly as it appears (including spaces)
+            let fullText = inputEl.innerText || '';
+            // Remove any trailing spaces (Monkeytype may add one after word)
+            fullText = fullText.replace(/\s+$/, '');
+            // Remove spaces inside? Actually spaces only appear at the end of a word.
+            // For the current word, we only care about the part before any space.
+            let typedSoFar = fullText.split(' ').pop() || ''; // get the last segment (current word being typed)
+            
+            // If word already fully typed, allow anything (space, backspace, etc.)
+            if (typedSoFar.length >= targetWord.length) return;
+
+            const expectedChar = targetWord[typedSoFar.length];
+            if (expectedChar && e.data !== expectedChar) {
+                e.preventDefault();
+                isCorrecting = true;
+                // Insert the correct character
+                document.execCommand('insertText', false, expectedChar);
+                // Reset flag after a short delay to let the event loop settle
+                setTimeout(() => { isCorrecting = false; }, 20);
+                updateStatus(`Corrected: "${e.data}" → "${expectedChar}" for word "${targetWord}"`);
+            }
+        };
+        input.addEventListener('beforeinput', beforeInputHandler);
+        updateStatus('Auto-correct ON (all letters)');
+    }
+
+    function stopAutoCorrect() {
+        const input = getInputElement();
+        if (input && beforeInputHandler) {
+            input.removeEventListener('beforeinput', beforeInputHandler);
+            beforeInputHandler = null;
+        }
+        updateStatus('Auto-correct OFF');
+    }
+
+    function toggleCorrectMode() {
+        correctActive = !correctActive;
+        if (correctActive) {
+            startAutoCorrect();
+        } else {
+            stopAutoCorrect();
+        }
+        const btn = document.getElementById('atToggleCorrect');
+        if (btn) {
+            btn.style.background = correctActive ? '#fa0' : '#444';
+            btn.innerText = correctActive ? '✓ CORRECT ON' : '✗ CORRECT OFF';
+        }
+    }
+
+    // ========== AUTO-TYPE (unchanged) ==========
     async function typeCharacter(char, target) {
         if (!target) return false;
         target.focus();
-        // Insert character using execCommand (works like real typing)
+        isAutoTyping = true;
         document.execCommand('insertText', false, char);
-        // Also dispatch a few events for good measure
-        target.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
-        target.dispatchEvent(new KeyboardEvent('keypress', { key: char, bubbles: true }));
-        target.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
+        await new Promise(r => setTimeout(r, 1000 / speed));
+        isAutoTyping = false;
         return true;
     }
 
     async function typeWord(word, inputEl) {
         for (let i = 0; i < word.length; i++) {
-            if (!active) return false;
+            if (!autoTypeActive) return false;
             await typeCharacter(word[i], inputEl);
-            await new Promise(r => setTimeout(r, 1000 / speed));
         }
-        // Send space (Monkeytype uses space to move to next word)
+        isAutoTyping = true;
         document.execCommand('insertText', false, ' ');
-        inputEl.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space', keyCode: 32, bubbles: true }));
-        inputEl.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', code: 'Space', keyCode: 32, bubbles: true }));
+        isAutoTyping = false;
         return true;
     }
 
-    async function run() {
-        if (!active) return;
+    async function runAutoType() {
+        if (!autoTypeActive) return;
         const word = getActiveWord();
         if (!word) {
             updateStatus('Waiting...');
             await new Promise(r => setTimeout(r, 500));
             if (!getActiveWord()) stopAutoType();
-            else run();
+            else runAutoType();
             return;
         }
         if (word === currentWord) {
-            await new Promise(r => setTimeout(r, 100));
-            run();
+            await new Promise(r => setTimeout(r, 50));
+            runAutoType();
             return;
         }
         currentWord = word;
-        updateStatus(`Typing: ${word}`);
+        updateStatus(`Auto-typing: ${word}`);
         const input = getInputElement();
         if (!input) { stopAutoType(); return; }
         await typeWord(word, input);
-        if (active) setTimeout(run, 80);
+        if (autoTypeActive) setTimeout(runAutoType, 30);
     }
 
-    function start() {
-        if (active) return;
-        active = true;
+    function startAutoType() {
+        if (autoTypeActive) return;
+        autoTypeActive = true;
         currentWord = '';
-        updateStatus('Starting...');
-        run();
-        checkInterval = setInterval(() => {
-            if (active && !getActiveWord()) run();
-        }, 2000);
+        updateStatus('Auto-type started');
+        runAutoType();
     }
 
-    function stop() {
-        active = false;
-        if (checkInterval) clearInterval(checkInterval);
-        updateStatus('Stopped');
+    function stopAutoType() {
+        autoTypeActive = false;
+        updateStatus('Auto-type stopped');
     }
 
+    // ========== CPS INPUT ==========
+    function setSpeedFromInput() {
+        const input = document.getElementById('cpsTextInput');
+        if (input) {
+            let val = parseFloat(input.value);
+            if (isNaN(val)) val = 60;
+            val = Math.max(1, val);
+            speed = val;
+            document.getElementById('speedval').innerText = speed;
+            document.getElementById('atspeed').value = speed;
+            updateStatus(`Speed set to ${speed} CPS`);
+        }
+    }
+
+    function toggleUI() {
+        if (!ui) return;
+        uiVisible = !uiVisible;
+        ui.style.display = uiVisible ? 'block' : 'none';
+        updateStatus(uiVisible ? 'UI shown' : 'UI hidden');
+    }
+
+    // ========== UI ==========
     function createUI() {
         if (ui) ui.remove();
         ui = document.createElement('div');
@@ -88,29 +178,47 @@
             position: fixed; bottom: 20px; left: 20px; z-index: 99999;
             background: #1e1e1e; color: #0f0; font-family: monospace;
             padding: 12px 18px; border-radius: 12px; border: 1px solid #0f0;
-            width: 260px; backdrop-filter: blur(4px); cursor: move;
+            width: 330px; backdrop-filter: blur(4px); cursor: move;
         `;
         ui.innerHTML = `
-            <div><b>🤖 AUTO-TYPER</b></div>
-            <div>Speed: <input type="range" id="atspeed" min="5" max="40" value="${speed}" step="1">
-            <span id="speedval">${speed}</span> cps</div>
-            <div style="display:flex; gap:8px; margin:8px 0">
-                <button id="atstart" style="background:#0f0;border:none;padding:4px 12px;">START</button>
-                <button id="atstop" style="background:#f00;border:none;padding:4px 12px;color:#fff;">STOP</button>
+            <div><b>🤖 MONKEY ASSISTANT</b> <span style="font-size:10px;">(Ctrl+Q toggle)</span></div>
+            <div style="margin:8px 0;">
+                <span>CPS: </span>
+                <input type="number" id="cpsTextInput" min="1" max="500" value="${speed}" step="1" style="width:70px;">
+                <button id="applyCps" style="margin-left:5px;">Apply</button>
+                <span> or slider: </span>
+                <input type="range" id="atspeed" min="1" max="200" value="${speed}" step="1" style="width:100px;">
+                <span id="speedval">${speed}</span>
             </div>
-            <div id="atstatus">Status: IDLE</div>
+            <div style="display:flex; gap:6px; margin:8px 0; flex-wrap:wrap;">
+                <button id="atStart" style="background:#0f0;border:none;padding:4px 10px;">▶ AUTO-TYPE</button>
+                <button id="atStop" style="background:#f00;border:none;padding:4px 10px;color:#fff;">⏹ STOP</button>
+                <button id="atToggleCorrect" style="background:#444;border:none;padding:4px 10px;">✗ CORRECT OFF</button>
+            </div>
+            <div id="atStatus">Status: IDLE</div>
         `;
         document.body.appendChild(ui);
 
-        document.getElementById('atstart').onclick = start;
-        document.getElementById('atstop').onclick = stop;
+        document.getElementById('atStart').onclick = startAutoType;
+        document.getElementById('atStop').onclick = stopAutoType;
+        document.getElementById('atToggleCorrect').onclick = toggleCorrectMode;
+        document.getElementById('applyCps').onclick = setSpeedFromInput;
         const slider = document.getElementById('atspeed');
-        slider.oninput = (e) => {
-            speed = parseInt(e.target.value);
+        const cpsText = document.getElementById('cpsTextInput');
+        slider.oninput = () => {
+            speed = parseInt(slider.value);
+            cpsText.value = speed;
             document.getElementById('speedval').innerText = speed;
         };
+        cpsText.onchange = () => {
+            let val = parseFloat(cpsText.value);
+            if (isNaN(val)) val = 60;
+            val = Math.max(1, val);
+            speed = val;
+            slider.value = val;
+            document.getElementById('speedval').innerText = val;
+        };
 
-        // Draggable
         let offsetX, offsetY;
         ui.onmousedown = (e) => {
             if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
@@ -127,12 +235,36 @@
     }
 
     function updateStatus(msg) {
-        const s = document.getElementById('atstatus');
-        if (s) s.innerText = `Status: ${msg}`;
-        console.log('[AutoType]', msg);
+        const el = document.getElementById('atStatus');
+        if (el) el.innerText = `Status: ${msg}`;
+        console.log('[MonkeyAssist]', msg);
     }
 
-    createUI();
-    updateStatus('Ready. Start a test on Monkeytype.');
-    window.autoTyper = { start, stop };
+    function init() {
+        createUI();
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'q') {
+                e.preventDefault();
+                toggleUI();
+            }
+        });
+        updateStatus('Ready. Auto-correct now works for every letter of every word.');
+        if (window.location.hostname === 'monkeytype.com') {
+            updateStatus('Monkeytype detected. Turn on CORRECT and type.');
+        }
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+
+    window.monkeyAssist = {
+        startAutoType,
+        stopAutoType,
+        toggleCorrectMode,
+        setSpeed: (cps) => { speed = Math.max(1, cps); },
+        toggleUI
+    };
 })();
