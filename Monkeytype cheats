@@ -1,4 +1,4 @@
-// monkey_assistant_ultra.js – Auto-correct + Auto-type (up to 999 CPS)
+// monkey_assistant_typable.js – Typable CPS up to 9999
 (function() {
     'use strict';
 
@@ -89,7 +89,7 @@
         target.focus();
         isAutoTyping = true;
         document.execCommand('insertText', false, char);
-        const delayMs = speed > 0 ? Math.max(1, 1000 / speed) : 1;
+        const delayMs = speed > 0 ? Math.max(0.5, 1000 / speed) : 0.5;
         await new Promise(r => setTimeout(r, delayMs));
         isAutoTyping = false;
         return true;
@@ -117,7 +117,7 @@
             return;
         }
         if (word === currentWord) {
-            await new Promise(r => setTimeout(r, 30));
+            await new Promise(r => setTimeout(r, 20));
             runAutoType();
             return;
         }
@@ -126,7 +126,7 @@
         const input = getInputElement();
         if (!input) { stopAutoType(); return; }
         await typeWord(word, input);
-        if (autoTypeActive) setTimeout(runAutoType, 20);
+        if (autoTypeActive) setTimeout(runAutoType, 15);
     }
 
     function startAutoType() {
@@ -142,16 +142,16 @@
         updateStatus('Auto-type stopped');
     }
 
-    // ========== CPS INPUT (up to 999) ==========
-    function setSpeedFromInput() {
+    // ========== CPS INPUT (type any number, up to 9999) ==========
+    function applySpeed() {
         const input = document.getElementById('cpsTextInput');
         if (input) {
             let val = parseFloat(input.value);
             if (isNaN(val) || val < 0) val = 1;
-            if (val > 999) val = 999;
+            if (val > 9999) val = 9999;
             speed = val;
-            document.getElementById('speedval').innerText = speed;
-            document.getElementById('atspeed').value = speed;
+            document.getElementById('speedDisplay').innerText = speed;
+            document.getElementById('atspeed').value = speed > 500 ? 500 : speed;
             updateStatus(`Speed set to ${speed} CPS`);
         }
     }
@@ -171,52 +171,72 @@
         ui.style.cssText = `
             position: fixed; bottom: 20px; left: 20px; z-index: 99999;
             background: #1e1e1e; color: #0f0; font-family: monospace;
-            padding: 12px 18px; border-radius: 12px; border: 1px solid #0f0;
+            padding: 14px 20px; border-radius: 14px; border: 1px solid #0f0;
             width: 340px; backdrop-filter: blur(4px); cursor: move;
+            box-shadow: 0 0 25px rgba(0,255,0,0.15);
         `;
         ui.innerHTML = `
-            <div><b>⚡ MONKEY ASSISTANT</b> <span style="font-size:10px;">(Ctrl+Q toggle)</span></div>
-            <div style="margin:8px 0;">
-                <span>CPS: </span>
-                <input type="number" id="cpsTextInput" min="1" max="999" value="${speed}" step="1" style="width:80px;">
-                <button id="applyCps" style="margin-left:5px;">Apply</button>
-                <span> or slider: </span>
-                <input type="range" id="atspeed" min="1" max="500" value="${speed}" step="5" style="width:100px;">
-                <span id="speedval">${speed}</span>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                <b>⚡ MONKEY ASSIST</b>
+                <span style="font-size:10px; color:#666;">Ctrl+Q toggle</span>
+            </div>
+            <div style="margin:8px 0; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                <span style="font-size:13px;">CPS:</span>
+                <input type="number" id="cpsTextInput" min="1" max="9999" value="${speed}" step="1" style="width:90px; padding:4px 8px; background:#222; border:1px solid #0f0; color:#0f0; border-radius:6px; font-family:monospace; font-size:14px;">
+                <button id="applyCps" style="padding:4px 12px; background:#0f0; border:none; border-radius:6px; color:#000; font-weight:bold; cursor:pointer;">Apply</button>
+                <span style="font-size:12px; color:#888;">or slider:</span>
+                <input type="range" id="atspeed" min="1" max="500" value="${speed > 500 ? 500 : speed}" step="5" style="width:80px;">
+                <span id="speedDisplay" style="font-size:14px; font-weight:bold; min-width:40px;">${speed}</span>
             </div>
             <div style="display:flex; gap:6px; margin:8px 0; flex-wrap:wrap;">
-                <button id="atStart" style="background:#0f0;border:none;padding:4px 10px;">▶ AUTO-TYPE</button>
-                <button id="atStop" style="background:#f00;border:none;padding:4px 10px;color:#fff;">⏹ STOP</button>
-                <button id="atToggleCorrect" style="background:#444;border:none;padding:4px 10px;">✗ CORRECT OFF</button>
+                <button id="atStart" style="flex:1; padding:6px 10px; background:#0f0; border:none; border-radius:8px; color:#000; font-weight:bold; cursor:pointer;">▶ AUTO-TYPE</button>
+                <button id="atStop" style="flex:1; padding:6px 10px; background:#f00; border:none; border-radius:8px; color:#fff; font-weight:bold; cursor:pointer;">⏹ STOP</button>
+                <button id="atToggleCorrect" style="flex:1; padding:6px 10px; background:#444; border:none; border-radius:8px; color:#fff; font-weight:bold; cursor:pointer;">✗ CORRECT OFF</button>
             </div>
-            <div id="atStatus">Status: IDLE</div>
-            <div style="font-size:9px; color:#666; margin-top:4px; text-align:center;">CPS up to 999 (browser may throttle above ~200)</div>
+            <div id="atStatus" style="font-size:12px; color:#888; text-align:center; margin-top:4px;">Status: IDLE</div>
+            <div style="font-size:9px; color:#444; text-align:center; margin-top:4px;">Type any CPS (1–9999), then Apply or press Enter</div>
         `;
         document.body.appendChild(ui);
 
         document.getElementById('atStart').onclick = startAutoType;
         document.getElementById('atStop').onclick = stopAutoType;
         document.getElementById('atToggleCorrect').onclick = toggleCorrectMode;
-        document.getElementById('applyCps').onclick = setSpeedFromInput;
+        document.getElementById('applyCps').onclick = applySpeed;
+
         const slider = document.getElementById('atspeed');
         const cpsText = document.getElementById('cpsTextInput');
+        const speedDisplay = document.getElementById('speedDisplay');
+
+        // Slider changes speed
         slider.oninput = () => {
-            speed = parseInt(slider.value);
-            cpsText.value = speed;
-            document.getElementById('speedval').innerText = speed;
-        };
-        cpsText.onchange = () => {
-            let val = parseFloat(cpsText.value);
-            if (isNaN(val) || val < 0) val = 1;
-            if (val > 999) val = 999;
+            const val = parseInt(slider.value);
             speed = val;
-            slider.value = val > 500 ? 500 : val;
-            document.getElementById('speedval').innerText = val;
+            cpsText.value = val;
+            speedDisplay.innerText = val;
+            updateStatus(`Speed set to ${val} CPS (slider)`);
         };
 
+        // Typing in number box + Enter key
+        cpsText.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                applySpeed();
+            }
+        });
+        cpsText.addEventListener('change', applySpeed);
+
+        // Also update speed display when typing manually
+        cpsText.addEventListener('input', () => {
+            let val = parseFloat(cpsText.value);
+            if (!isNaN(val) && val >= 0) {
+                speedDisplay.innerText = val > 9999 ? '9999' : val;
+            }
+        });
+
+        // Draggable
         let offsetX, offsetY;
         ui.onmousedown = (e) => {
-            if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
+            if (e.target.closest('button') || e.target.closest('input')) return;
             offsetX = e.clientX - ui.offsetLeft;
             offsetY = e.clientY - ui.offsetTop;
             document.onmousemove = (m) => {
@@ -243,7 +263,7 @@
                 toggleUI();
             }
         });
-        updateStatus('Ready. Speed up to 999 CPS (slider to 500).');
+        updateStatus('Ready. Type CPS and press Enter or Apply.');
         if (window.location.hostname === 'monkeytype.com') {
             updateStatus('Monkeytype detected. Turn on CORRECT and type.');
         }
@@ -259,7 +279,7 @@
         startAutoType,
         stopAutoType,
         toggleCorrectMode,
-        setSpeed: (cps) => { speed = Math.max(1, Math.min(999, cps)); },
+        setSpeed: (cps) => { speed = Math.max(1, Math.min(9999, cps)); },
         toggleUI
     };
 })();
